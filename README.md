@@ -41,6 +41,7 @@ no subscription. Your records stay in plain files on your own (or your bot's) co
 Nothing is hard-coded to one country. During setup you tell it your currency, taxes and paperwork style once:
 
 - Any currency, including 0-decimal (JPY, KRW) and 3-decimal (KWD, BHD) ones, with your separators and symbol.
+  Where a symbol is shared (like $), totals also show the code, e.g. "$1,234.50 CAD", so customers know which dollar.
 - Any taxes: one or several, on everything or only on materials, prices before tax or including tax, even compound
   taxes. GST/HST/PST, VAT, sales tax, consumption tax: you name them, set the rates and confirm them.
 - Your registration numbers on every invoice, your date format, letter or A4 paper, and documents in your language.

@@ -205,7 +205,7 @@ table.totals tr.balance td {{ background: color-mix(in srgb, var(--brand) 14%, w
 .sign {{ display: grid; grid-template-columns: 2fr 1.4fr 1fr; gap: 16px; margin-top: 34px; }}
 .sign span {{ border-top: 1px solid #8a8e96; font-size: 11px; color: var(--muted); padding-top: 3px; }}
 .fine {{ font-size: 11px; color: var(--muted); margin-top: 12px; }}
-.thanks {{ color: var(--brand); font-weight: 700; margin-top: 18px; }}
+.thanks {{ color: var(--brand); font-weight: 700; margin-top: 18px; break-before: avoid-page; }}
 footer {{ border-top: 1px solid var(--rule); margin-top: 22px; padding-top: 8px; font-size: 11px; color: var(--muted); }}
 .stamp {{ position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%) rotate(-28deg); font-size: 120px;
           font-weight: 900; color: rgba(90, 96, 110, .12); pointer-events: none; z-index: 0; }}

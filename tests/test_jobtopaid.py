@@ -110,6 +110,14 @@ class MoneyTests(unittest.TestCase):
                 [],
             )
 
+    def test_currency_code_only_where_the_symbol_is_shared(self):
+        def shown(code, setting="auto"):
+            return currency_display({"currency": code, "show_currency_code": setting})["show_code"]
+
+        self.assertEqual([shown(c) for c in ("USD", "CAD", "JPY", "SEK")], [True] * 4)  # $, ¥ and kr are shared
+        self.assertEqual([shown(c) for c in ("EUR", "GBP", "CHF", "XYZ")], [False] * 4)  # unique, or already a code
+        self.assertEqual((shown("EUR", "always"), shown("USD", "never")), (True, False))
+
     def test_formats(self):
         self.assertEqual(format_money(Decimal("1234.5"), currency_display({"currency": "USD"})), "$1,234.50")
         self.assertEqual(format_money(Decimal("1234.5"), currency_display({"currency": "EUR"})), "1.234,50 €")
@@ -490,6 +498,20 @@ class RenderTests(StoreCase):
         html = Path(result["files"]["html"]).read_text(encoding="utf-8")
         self.assertIn("Ünïcödé-ish", html)
         self.assertNotIn("unit_cost", html)
+
+    def test_currency_code_on_headline_totals(self):
+        spec = {"title": "Call-out", "lines": [{"kind": "fee", "description": "Call-out", "unit_price": "100"}]}
+        quote = docs.quote_create(self.store, spec, customer_id=self.cust["id"])["quote"]
+
+        def html():
+            result = render_doc(self.store, self.store.doc(quote["id"]), fmt="html", engine="builtin")
+            return Path(result["files"]["html"]).read_text(encoding="utf-8")
+
+        self.assertIn("$105.00 CAD", html())  # Canada's $ is shared with the US, Australia...
+        profile = self.store.profile()
+        profile["locale"]["show_currency_code"] = "never"
+        self.store.save_profile(profile)
+        self.assertNotIn("105.00 CAD", html())
 
     def test_costs_never_reach_customer_documents(self):
         quote = docs.quote_create(

@@ -37,6 +37,9 @@ like 15 Oct 2026. Look right?")
 - Currency (`locale.currency`). The symbol, separators and symbol position default by currency; override
   with `locale.currency_symbol`, `locale.symbol_position` (before/after), `locale.decimal_separator`,
   `locale.thousands_separator` if their country writes it differently.
+- Currency code on totals (`locale.show_currency_code`): `auto` (the default) prints the code next to
+  the totals when other currencies use the same symbol, e.g. "$1,234.50 CAD", so a customer can't mistake
+  which dollar (or kr, or ¥) is meant. Set `always` or `never` if the owner prefers.
 - Date style (`locale.date_format`): `D MMM YYYY` (default, unambiguous), `DD/MM/YYYY`, `MM/DD/YYYY`,
   `YYYY-MM-DD`, `DD.MM.YYYY`, `DD-MM-YYYY`.
 - Paper size (`locale.paper_size`): `letter` (US, Canada, Mexico, Philippines) or `a4` (most others).

@@ -1251,8 +1251,7 @@ class Layout:
         self.small_block(labels["terms"], v.get("terms"))
         if v.get("tax_note"):
             self.small_block("", v["tax_note"])
-        if v.get("thank_you"):
-            self.need(20)
+        if v.get("thank_you") and self.y + 20 <= self.bottom:  # never start a page just for the thank-you
             self.y += 12
             self.c.text(self.margin, self.y, v["thank_you"], "F2", 10, self.color)
         self.footer_all()

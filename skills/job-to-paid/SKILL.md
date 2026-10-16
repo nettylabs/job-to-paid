@@ -70,6 +70,10 @@ If you can't resolve the path, look for it where plugins are usually installed:
 - PDFs land in `<data folder>/output/`. Attach them when you send. Marking a document sent keeps a
   copy of that exact PDF in `output/sent/`.
 
+**Showing what it can do** (before setup, or for a demo): `jtp --home <a separate folder, e.g.
+/tmp/jtp-demo> demo --currency <the owner's currency>` builds a sample business with customers, jobs and
+invoices. Keep using that `--home` for the demo, and never put demo data in the owner's real data folder.
+
 **First thing every session:** run `jtp doctor`. If it isn't initialized, or `setup.missing` isn't
 empty, do the setup in [references/setup.md](references/setup.md) before quoting or invoicing.
 

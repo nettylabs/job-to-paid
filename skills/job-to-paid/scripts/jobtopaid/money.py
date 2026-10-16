@@ -50,7 +50,6 @@ CURRENCY_DEFAULTS = {
     "AUD": ("$", "before", ".", ","),
     "NZD": ("$", "before", ".", ","),
     "GBP": ("£", "before", ".", ","),
-    "IEP": ("£", "before", ".", ","),
     "EUR": (" €", "after", ",", "."),
     "CHF": ("CHF ", "before", ".", "'"),
     "JPY": ("¥", "before", ".", ","),
@@ -95,14 +94,27 @@ def q(amount: Decimal, places: int) -> Decimal:
 def currency_display(locale: dict) -> dict:
     code = (locale.get("currency") or "USD").upper()
     symbol, position, dec_sep, thou_sep = CURRENCY_DEFAULTS.get(code, (code + " ", "before", ".", ","))
+    symbol = locale.get("currency_symbol", symbol)
     return {
         "code": code,
-        "symbol": locale.get("currency_symbol", symbol),
+        "symbol": symbol,
         "position": locale.get("symbol_position", position),
         "decimal": locale.get("decimal_separator", dec_sep),
         "thousands": locale.get("thousands_separator", thou_sep),
         "places": minor_units(code),
+        "show_code": _show_code(code, symbol, locale.get("show_currency_code") or "auto"),
     }
+
+
+def _show_code(code: str, symbol: str, setting: str) -> bool:
+    """Print the ISO code next to headline totals? "auto" does it when other
+    currencies use the same symbol ($, kr, ¥), so customers can't mix them up."""
+    if symbol.strip().upper() == code or setting == "never":
+        return False
+    if setting == "always":
+        return True
+    mine = symbol.strip()
+    return any(other != code and entry[0].strip() == mine for other, entry in CURRENCY_DEFAULTS.items())
 
 
 def _group(digits: str, sep: str) -> str:

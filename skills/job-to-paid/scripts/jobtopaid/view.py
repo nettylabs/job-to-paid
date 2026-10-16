@@ -41,8 +41,9 @@ class _Ctx:
         self.disp = store.money()
         self.date_fmt = self.profile["locale"].get("date_format")
 
-    def money(self, value, extra=0) -> str:
-        return format_money(to_decimal(value), self.disp, extra_places=extra)
+    def money(self, value, extra=0, code=False) -> str:
+        text = format_money(to_decimal(value), self.disp, extra_places=extra)
+        return f"{text} {self.disp['code']}" if code and self.disp.get("show_code") else text
 
     def date(self, text) -> str:
         return format_date(from_iso(text) if isinstance(text, str) else text, self.date_fmt)
@@ -164,7 +165,11 @@ def _totals_rows(ctx: _Ctx, totals: dict, final_label: str | None = None) -> lis
             rows.append({"label": labels["subtotal"], "value": ctx.money(totals["subtotal"]), "strong": False})
             rows.append({"label": labels["discount"], "value": ctx.money(totals["discount"]), "strong": False})
         rows.append(
-            {"label": final_label or labels["total_incl_tax"], "value": ctx.money(totals["total"]), "strong": True}
+            {
+                "label": final_label or labels["total_incl_tax"],
+                "value": ctx.money(totals["total"], code=True),
+                "strong": True,
+            }
         )
         for tax in totals.get("taxes", []):
             rows.append(
@@ -188,7 +193,9 @@ def _totals_rows(ctx: _Ctx, totals: dict, final_label: str | None = None) -> lis
                 "strong": False,
             }
         )
-    rows.append({"label": final_label or labels["total"], "value": ctx.money(totals["total"]), "strong": True})
+    rows.append(
+        {"label": final_label or labels["total"], "value": ctx.money(totals["total"], code=True), "strong": True}
+    )
     return rows
 
 
@@ -290,7 +297,7 @@ def _build_view(store, doc: dict) -> dict:
                 view["summary"]["rows"].append(
                     {
                         "name": heading,
-                        "total": ctx.money(option["totals"]["total"]),
+                        "total": ctx.money(option["totals"]["total"], code=True),
                         "badge": section["badge"],
                         "deposit": ctx.money(option["deposit_due"]) if option.get("deposit_due") else "",
                     }
@@ -371,7 +378,7 @@ def _build_view(store, doc: dict) -> dict:
             view["totals"].append({"label": labels["payments_received"], "value": ctx.money(-paid), "strong": False})
         if credits:
             view["totals"].append({"label": labels["credits"], "value": ctx.money(-credits), "strong": False})
-        view["balance"] = {"label": labels["balance_due"], "value": ctx.money(max(state["balance"], 0))}
+        view["balance"] = {"label": labels["balance_due"], "value": ctx.money(max(state["balance"], 0), code=True)}
         prev = (doc.get("source") or {}).get("previously_billed_percent")
         if prev:
             view["intro"] = (
@@ -442,12 +449,14 @@ def build_receipt_view(store, payment: dict, invoice: dict | None, job: dict) ->
             ],
         }
     ]
-    view["totals"] = [{"label": labels["amount_paid"], "value": ctx.money(payment["amount"]), "strong": True}]
+    view["totals"] = [
+        {"label": labels["amount_paid"], "value": ctx.money(payment["amount"], code=True), "strong": True}
+    ]
     if invoice:
         from .documents import invoice_state
 
         state = invoice_state(invoice, store.today())
-        view["balance"] = {"label": labels["balance_due"], "value": ctx.money(max(state["balance"], 0))}
+        view["balance"] = {"label": labels["balance_due"], "value": ctx.money(max(state["balance"], 0), code=True)}
     view["stamp"] = labels["paid_stamp"]
     view["thank_you"] = labels["thank_you"]
     return view

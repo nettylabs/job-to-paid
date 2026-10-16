@@ -95,6 +95,7 @@ DEFAULT_PROFILE = {
     },
     "locale": {
         "currency": "USD",
+        "show_currency_code": "auto",
         "date_format": "D MMM YYYY",
         "paper_size": "letter",
         "language": "en",
@@ -239,6 +240,8 @@ def validate(profile: dict) -> list:
         errors.append(f"locale.date_format must be one of: {', '.join(DATE_FORMATS)}.")
     if profile["locale"].get("paper_size") not in PAPER_SIZES:
         errors.append("locale.paper_size must be letter or a4.")
+    if profile["locale"].get("show_currency_code", "auto") not in ("auto", "always", "never"):
+        errors.append("locale.show_currency_code must be auto, always or never.")
     return errors
 
 
