@@ -147,7 +147,8 @@ jtp quote extend Q-0001 --days 14            # expired or about to expire
   Record exactly how they accepted (email reply, signed PDF, text). If there's a deposit, the output
   says how much (`deposit_due_display`); send a deposit request if they haven't paid (messages.md). When it arrives,
   record it with `jtp payment record --job J-0004 --deposit --amount <amount> --method "e-Transfer"
-  --reference <their reference>`.
+  --reference <their reference>`. If the owner gives a percentage instead ("she paid the 25%"), use
+  `--percent 25` in place of `--amount`, so the toolkit works out the amount from the accepted option.
   Offer to book the work in the calendar if one is connected.
 - **No**: `jtp quote decline Q-0001 --reason "Went with a cheaper quote"`. The reason feeds win-rate
   insight, so ask for it gently.

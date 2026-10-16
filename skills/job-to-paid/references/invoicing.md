@@ -11,6 +11,10 @@
 | Quick one-off (service call) | `jtp invoice create --customer C-0003 --title "Service call: no hot water" --spec '[...]'` |
 | Add something extra to any of the above | add `--spec '[{"kind":"fee","description":"Return visit","unit_price":89}]'` |
 
+**Rounding:** tax is worked out on each invoice as a whole, so a final invoice can be a cent away from
+adding up the quote and change order totals yourself. That's normal rounding, not a mistake: explain it
+if the owner asks, and never adjust it.
+
 **Deposits, the simple way:** if the customer pays a deposit, record it on the job
 (`jtp payment record --job J-0004 --deposit --amount 500 ...`). It comes off the next invoice
 automatically when issued, shown as a payment received. Use a deposit *invoice* only when the owner

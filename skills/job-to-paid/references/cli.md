@@ -452,7 +452,8 @@ Examples:
 ```text
 usage: jtp payment [-h] [--job JOB] [--amount AMOUNT] [--method METHOD] [--date DATE]
                    [--reference REFERENCE] [--note NOTE] [--from START] [--to END] [--deposit]
-                   [--allow-duplicate] [--format {pdf,html,both}] [--engine {auto,builtin,chrome}]
+                   [--percent PERCENT] [--allow-duplicate] [--format {pdf,html,both}]
+                   [--engine {auto,builtin,chrome}]
                    {record,list,undo,receipt} [ID]
 
 Record payments and deposits, list them, undo mistakes, make receipts.
@@ -473,7 +474,8 @@ options:
   --note NOTE           Free text kept on record
   --from START
   --to END
-  --deposit
+  --deposit             Money in before invoicing, held on the job (with --job)
+  --percent PERCENT     Deposit as a percent of the accepted quote, instead of --amount (e.g. 25)
   --allow-duplicate
   --format {pdf,html,both}
   --engine {auto,builtin,chrome}
@@ -481,6 +483,7 @@ options:
 Examples:
   jtp payment record INV-0003 --amount 1543.50 --method "e-Transfer" --reference CA1234
   jtp payment record --job J-0004 --deposit --amount 500 --method "Bank transfer"
+  jtp payment record --job J-0004 --deposit --percent 25 --method "Bank transfer"   (25% of the accepted quote)
   jtp payment list --from 2026-10-01
   jtp payment undo PAY-0007
   jtp payment receipt PAY-0007

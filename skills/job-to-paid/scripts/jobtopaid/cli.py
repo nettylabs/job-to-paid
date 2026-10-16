@@ -815,11 +815,20 @@ def cmd_payment(store, args):
     if args.action == "record":
         if not args.invoice and not args.job:
             raise JTPError("Say which invoice (jtp payment record INV-0001 ...) or job (--job J-0001 --deposit).")
+        amount, basis = args.amount, ""
+        if args.percent is not None:
+            if args.amount is not None or not args.job:
+                raise JTPError(
+                    "--percent is for a deposit on a job, instead of --amount.",
+                    hint="jtp payment record --job J-0004 --deposit --percent 25 --method 'Bank transfer'",
+                )
+            value, total = docs.deposit_for_percent(store, args.job, args.percent)
+            amount, basis = str(value), f" ({args.percent.strip().rstrip('%')}% of {_money(store, total)})"
         out = docs.payment_record(
             store,
             invoice_id=args.invoice,
             job_id=args.job,
-            amount=args.amount,
+            amount=amount,
             method=args.method,
             date=args.date,
             reference=args.reference,
@@ -832,7 +841,7 @@ def cmd_payment(store, args):
         if out.get("invoice"):
             out = _status_out(store, out, "invoice", _invoice_summary)
         elif out.get("payment") and out.get("job"):
-            out["summary"] = f"{_money(store, out['payment']['amount'])} held on {out['job']}" + (
+            out["summary"] = f"{_money(store, out['payment']['amount'])}{basis} held on {out['job']}" + (
                 " (already recorded)" if out.get("duplicate") else ""
             )
         return out
@@ -1342,6 +1351,7 @@ def build_parser() -> argparse.ArgumentParser:
         [
             'jtp payment record INV-0003 --amount 1543.50 --method "e-Transfer" --reference CA1234',
             'jtp payment record --job J-0004 --deposit --amount 500 --method "Bank transfer"',
+            'jtp payment record --job J-0004 --deposit --percent 25 --method "Bank transfer"   (25% of the accepted quote)',
             "jtp payment list --from 2026-10-01",
             "jtp payment undo PAY-0007",
             "jtp payment receipt PAY-0007",
@@ -1354,7 +1364,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(flag, help=FLAG_HELP.get(flag))
     p.add_argument("--from", dest="start")
     p.add_argument("--to", dest="end")
-    p.add_argument("--deposit", action="store_true")
+    p.add_argument("--deposit", action="store_true", help="Money in before invoicing, held on the job (with --job)")
+    p.add_argument("--percent", help="Deposit as a percent of the accepted quote, instead of --amount (e.g. 25)")
     p.add_argument("--allow-duplicate", action="store_true")
     p.add_argument("--format", default="pdf", choices=["pdf", "html", "both"])
     p.add_argument("--engine", default="auto", choices=["auto", "builtin", "chrome"])

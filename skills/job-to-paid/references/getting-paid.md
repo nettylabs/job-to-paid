@@ -5,6 +5,7 @@
 ```bash
 jtp payment record INV-0012 --amount 1543.50 --method "e-Transfer" --reference CA7781 --date 2026-10-14
 jtp payment record --job J-0004 --deposit --amount 500 --method "Bank transfer"   # before invoicing
+jtp payment record --job J-0004 --deposit --percent 25 --method "Bank transfer"   # 25% of the accepted quote
 jtp payment receipt PAY-0009          # a PDF receipt to send the customer
 jtp payment undo PAY-0009             # recorded by mistake
 jtp payment list --from 2026-10-01

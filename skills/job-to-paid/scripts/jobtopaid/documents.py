@@ -863,6 +863,23 @@ def invoice_create(
     }
 
 
+def deposit_for_percent(store, job_id: str, percent) -> tuple:
+    """(amount, option total) for "she paid the 25% deposit": a percent of the accepted option's total."""
+    job = store.job(job_id)
+    if not job.get("accepted_quote"):
+        raise JTPError(
+            f"{job['id']} has no accepted quote to take a percentage of.",
+            hint="Record the amount that came in instead: --amount <amount>",
+        )
+    quote = store.doc(job["accepted_quote"], "quote")
+    option = next(o for o in quote["options"] if o["key"] == quote["accepted"]["option"])
+    pct = to_decimal(percent, "percent")
+    if pct <= 0 or pct > HUNDRED:
+        raise JTPError("The deposit percent must be more than 0 and at most 100.")
+    total = to_decimal(option["totals"]["total"])
+    return q(total * pct / HUNDRED, store.places), total
+
+
 def deposits_held(job: dict) -> Decimal:
     """Deposits paid on the job that haven't been applied to an invoice yet."""
     return sum((to_decimal(p.get("remaining", "0")) for p in job.get("payments", [])), ZERO)

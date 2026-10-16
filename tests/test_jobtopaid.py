@@ -12,7 +12,7 @@ import sys
 import tempfile
 import unittest
 import zlib
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -421,6 +421,17 @@ class WorkflowTests(StoreCase):
             lines = [r for r in csv.DictReader(handle) if r["type"] == "credit_note"]
         self.assertEqual(lines[0]["net_excl_tax"], "-20.00")
 
+    def test_deposit_as_a_percent_of_the_accepted_quote(self):
+        quote = self._quote()
+        job_id = docs.quote_accept(self.store, quote["id"], "B", "Jane", "email", None)["job"]
+        amount, total = docs.deposit_for_percent(self.store, job_id, "25%")
+        option_b = next(o for o in self.store.doc(quote["id"])["options"] if o["key"] == "B")
+        self.assertEqual(total, Decimal(option_b["totals"]["total"]))
+        self.assertEqual(amount, (total * Decimal("0.25")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        no_quote = records.job_create(self.store, self.cust["id"], "Not quoted yet")
+        with self.assertRaises(JTPError):
+            docs.deposit_for_percent(self.store, no_quote["id"], "25")
+
     def test_preview_without_a_customer(self):
         spec = {"title": "Sample", "lines": [{"kind": "fee", "description": "Call-out", "unit_price": 10}]}
         quote = docs.quote_create(self.store, spec, dry_run=True)["quote"]
@@ -555,8 +566,14 @@ class CliTests(unittest.TestCase):
             self.assertIn("£108.00", out["summary"])
             code, out = self.run_cli(home, "quote", "accept", out["quote"]["id"])
             self.assertEqual(code, 0)
-            code, out = self.run_cli(home, "invoice", "create", "--job", out["job"])
+            job = out["job"]
+            code, out = self.run_cli(
+                home, "payment", "record", "--job", job, "--deposit", "--percent", "25", "--method", "Bank"
+            )
+            self.assertEqual((code, out["payment"]["amount"]), (0, "27.00"))  # 25% of £108.00
+            code, out = self.run_cli(home, "invoice", "create", "--job", job)
             self.assertEqual(code, 0)
+            self.assertIn("leaving £81.00", out["summary"])
             code, out = self.run_cli(home, "invoice", "issue", out["invoice"]["id"])
             self.assertIn("£108.00", out["summary"])
             self.assertNotIn("lines", out["invoice"])  # status changes print the short form

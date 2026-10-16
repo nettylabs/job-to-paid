@@ -100,7 +100,11 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
             f"{store.home} already has data.", hint="Use a fresh folder for the demo, e.g. --home /tmp/jtp-demo"
         )
     store.home.mkdir(parents=True, exist_ok=True)
-    store.save_profile(demo_profile(currency))
+    profile = demo_profile(currency)
+    # The demo business takes a 25% deposit to book jobs of 1,000 or more.
+    profile["terms"]["deposit_percent"] = "25"
+    profile["terms"]["deposit_min_total"] = "1000"
+    store.save_profile(profile)
     for item in PRICEBOOK:
         records.pricebook_add(store, item)
     jane = records.customer_add(
