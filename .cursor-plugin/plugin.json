@@ -1,0 +1,36 @@
+{
+  "name": "job-to-paid",
+  "displayName": "Job to Paid",
+  "version": "1.0.0",
+  "description": "Quotes, change orders, invoices and payment follow-ups for trades and service businesses. Voice note to PDF quote with good/better/best options, deposits, progress billing, reminders you approve, and a morning money brief. Any country, currency or tax setup. Runs locally; no account needed.",
+  "author": {
+    "name": "Netty Labs"
+  },
+  "publisher": "Netty Labs",
+  "homepage": "https://github.com/nettylabs/job-to-paid",
+  "repository": "https://github.com/nettylabs/job-to-paid",
+  "license": "MIT",
+  "logo": "assets/logo.png",
+  "keywords": [
+    "job to paid",
+    "invoicing",
+    "invoices",
+    "quotes",
+    "estimates",
+    "change orders",
+    "contractors",
+    "trades",
+    "small business",
+    "payment reminders",
+    "bookkeeping"
+  ],
+  "category": "productivity",
+  "tags": [
+    "invoicing",
+    "quotes",
+    "small-business",
+    "trades"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "nettylabs",
+  "owner": {
+    "name": "Netty Labs"
+  },
+  "metadata": {
+    "description": "Netty Labs plugins"
+  },
+  "plugins": [
+    {
+      "name": "job-to-paid",
+      "source": "./",
+      "description": "Quotes, change orders, invoices and payment follow-ups for trades and service businesses, in any currency or tax setup."
+    }
+  ]
+}

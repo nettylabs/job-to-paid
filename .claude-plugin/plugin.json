@@ -1,0 +1,19 @@
+{
+  "name": "job-to-paid",
+  "version": "1.0.0",
+  "description": "Quotes, change orders, invoices and payment follow-ups for trades and service businesses, in any country, currency or tax setup. Runs locally; no account needed.",
+  "author": {
+    "name": "Netty Labs",
+    "url": "https://github.com/nettylabs"
+  },
+  "homepage": "https://github.com/nettylabs/job-to-paid",
+  "repository": "https://github.com/nettylabs/job-to-paid",
+  "license": "MIT",
+  "keywords": [
+    "job to paid",
+    "invoicing",
+    "quotes",
+    "contractors",
+    "trades"
+  ]
+}

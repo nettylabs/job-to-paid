@@ -1,0 +1,585 @@
+"""Tests for the Job to Paid toolkit. Run from the plugin root:
+
+python3 -m unittest discover -s tests -v
+"""
+
+import csv
+import json
+import os
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+import zlib
+from decimal import Decimal
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skills" / "job-to-paid" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+from jobtopaid import documents as docs  # noqa: E402
+from jobtopaid import followups, records, reports  # noqa: E402
+from jobtopaid.demo import demo_profile, seed  # noqa: E402
+from jobtopaid.money import compute_totals, currency_display, format_money  # noqa: E402
+from jobtopaid.pdf import _png_decode  # noqa: E402
+from jobtopaid.pricing import normalize_lines  # noqa: E402
+from jobtopaid.render import render_doc  # noqa: E402
+from jobtopaid.store import Store  # noqa: E402
+from jobtopaid.util import JTPError, to_decimal  # noqa: E402
+
+EVERY = ["labour", "material", "equipment", "subcontract", "fee", "other"]
+
+
+def totals(lines, taxes, places=2, inclusive=False):
+    return compute_totals(lines, {"taxes": taxes, "prices_include_tax": inclusive}, places)
+
+
+class MoneyTests(unittest.TestCase):
+    def test_tax_only_on_materials(self):
+        gst = {"code": "GST", "rate": "5", "applies_to": EVERY}
+        pst = {"code": "PST", "rate": "7", "applies_to": ["material"]}
+        t = totals(
+            [
+                {"kind": "labour", "qty": "1", "amount": "200.00", "tax_codes": ["GST"]},
+                {"kind": "material", "qty": "1", "amount": "100.00", "tax_codes": ["GST", "PST"]},
+            ],
+            [gst, pst],
+        )
+        self.assertEqual(t["total"], "322.00")
+        self.assertEqual([r["amount"] for r in t["taxes"]], ["15.00", "7.00"])
+
+    def test_compound_tax(self):
+        taxes = [
+            {"code": "A", "rate": "5", "applies_to": EVERY},
+            {"code": "B", "rate": "9.975", "applies_to": EVERY, "compound": True},
+        ]
+        t = totals([{"kind": "other", "qty": "1", "amount": "100.00", "tax_codes": ["A", "B"]}], taxes)
+        self.assertEqual(t["total"], "115.47")
+
+    def test_tax_inclusive(self):
+        vat = {"code": "VAT", "rate": "20", "applies_to": EVERY}
+        t = totals([{"kind": "other", "qty": "1", "amount": "99.99", "tax_codes": ["VAT"]}], [vat], inclusive=True)
+        self.assertEqual(t["total"], "99.99")
+        self.assertEqual(Decimal(t["net_excl_tax"]) + Decimal(t["tax_total"]), Decimal("99.99"))
+
+    def test_inclusive_with_compound_is_refused(self):
+        taxes = [{"code": "A", "rate": "5", "applies_to": EVERY, "compound": True}]
+        with self.assertRaises(JTPError):
+            totals([{"kind": "other", "qty": "1", "amount": "1", "tax_codes": ["A"]}], taxes, inclusive=True)
+
+    def test_currency_places(self):
+        ct = {"code": "CT", "rate": "10", "applies_to": EVERY}
+        self.assertEqual(
+            totals([{"kind": "other", "qty": "1", "amount": "333", "tax_codes": ["CT"]}], [ct], 0)["total"], "366"
+        )
+        self.assertEqual(
+            totals([{"kind": "other", "qty": "1", "amount": "1.234", "tax_codes": []}], [], 3)["total"], "1.234"
+        )
+
+    def test_discount_is_spread_exactly(self):
+        gst = {"code": "GST", "rate": "5", "applies_to": EVERY}
+        lines = [
+            {"kind": "labour", "qty": "1", "amount": "0.01", "tax_codes": ["GST"]},
+            {"kind": "material", "qty": "1", "amount": "333.33", "tax_codes": ["GST"]},
+            {"kind": "material", "qty": "1", "amount": "666.66", "tax_codes": ["GST"]},
+            {"kind": "discount", "percent": "33"},
+        ]
+        t = totals(lines, [gst])
+        self.assertEqual(sum(Decimal(ln["discount"]) for ln in lines[:3]), -Decimal(t["discount"]))
+        self.assertEqual(Decimal(t["net"]), sum(Decimal(ln["net"]) for ln in lines[:3]))
+
+    def test_discount_stays_in_its_section(self):
+        lines = [
+            {"kind": "labour", "qty": "1", "amount": "100.00", "tax_codes": []},
+            {"kind": "discount", "percent": "10"},
+            {"kind": "labour", "qty": "1", "amount": "50.00", "tax_codes": [], "section": "Change order"},
+        ]
+        t = totals(lines, [])
+        self.assertEqual(t["discount"], "-10.00")
+        self.assertEqual(lines[2]["discount"], "0")
+
+    def test_discount_too_big(self):
+        with self.assertRaises(JTPError):
+            totals(
+                [
+                    {"kind": "fee", "qty": "1", "amount": "10.00", "tax_codes": []},
+                    {"kind": "discount", "amount_input": "11"},
+                ],
+                [],
+            )
+
+    def test_formats(self):
+        self.assertEqual(format_money(Decimal("1234.5"), currency_display({"currency": "USD"})), "$1,234.50")
+        self.assertEqual(format_money(Decimal("1234.5"), currency_display({"currency": "EUR"})), "1.234,50 €")
+        self.assertEqual(format_money(Decimal("1234.5"), currency_display({"currency": "CHF"})), "CHF 1'234.50")
+        self.assertEqual(format_money(Decimal("1234"), currency_display({"currency": "JPY"})), "¥1,234")
+        self.assertEqual(format_money(Decimal("-5"), currency_display({"currency": "GBP"})), "-£5.00")
+
+    def test_strict_number_parsing(self):
+        self.assertEqual(to_decimal("$1,234.50"), Decimal("1234.50"))
+        self.assertEqual(to_decimal("7%"), Decimal("7"))
+        for bad in ("1.234,50", "12,5", "abc", None, True):
+            with self.assertRaises(JTPError):
+                to_decimal(bad)
+
+
+class StoreCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["JTP_TODAY"] = "2026-10-15"
+        self.store = Store(Path(self.tmp.name) / "data")
+        self.store.home.mkdir(parents=True)
+        profile = demo_profile("CAD")
+        profile["tax"]["taxes"] = [
+            {"code": "GST", "name": "GST", "rate": "5", "applies_to": EVERY},
+            {"code": "PST", "name": "PST", "rate": "7", "applies_to": ["material", "equipment"]},
+        ]
+        self.store.save_profile(profile)
+        self.cust = records.customer_add(self.store, {"name": "Jane Doe", "email": "jane@example.com"})["customer"]
+
+    def tearDown(self):
+        os.environ.pop("JTP_TODAY", None)
+        self.tmp.cleanup()
+
+
+class PricingTests(StoreCase):
+    def test_labour_rate_markup_and_pricebook(self):
+        records.pricebook_add(self.store, {"name": "Valve", "kind": "material", "cost": "20", "markup_pct": "50"})
+        lines, warnings, suggestions = normalize_lines(
+            self.store.profile(),
+            self.store.pricebook(),
+            [
+                {"kind": "labour", "description": "Install", "qty": 2},
+                {"kind": "material", "description": "Pipe", "qty": 3, "unit_cost": "10", "estimate": True},
+                {"kind": "material", "pricebook": "valve", "qty": 1},
+            ],
+            2,
+        )
+        self.assertEqual(lines[0]["unit_price"], "95")
+        self.assertEqual(lines[1]["unit_price"], "12.50")
+        self.assertEqual(lines[2]["unit_price"], "30.00")
+        self.assertEqual(lines[1]["tax_codes"], ["GST", "PST"])
+        self.assertEqual(lines[0]["tax_codes"], ["GST"])
+        self.assertTrue(warnings)
+        self.assertEqual([s["name"] for s in suggestions], ["Pipe"])
+
+    def _gst_only(self, inclusive=False, costs_include_tax=False):
+        profile = self.store.profile()
+        profile["tax"]["taxes"] = [{"code": "GST", "name": "GST", "rate": "10", "applies_to": EVERY}]
+        profile["tax"]["prices_include_tax"] = inclusive
+        profile["tax"]["costs_include_tax"] = costs_include_tax
+        self.store.save_profile(profile)
+        return self.store.profile()
+
+    def test_markup_with_tax_inclusive_prices(self):
+        profile = self._gst_only(inclusive=True)
+        spec = [{"kind": "material", "description": "Flex", "qty": 1, "unit_cost": "28", "markup_pct": "20"}]
+        lines, _, _ = normalize_lines(profile, [], spec, 2)
+        # 28 + 20% = 33.60 before GST; the customer sees 36.96 with GST included.
+        self.assertEqual(lines[0]["unit_price"], "36.96")
+        self.assertEqual(Decimal(lines[0]["unit_cost"]), Decimal("28"))
+
+    def test_supplier_costs_that_include_tax(self):
+        profile = self._gst_only(costs_include_tax=True)
+        spec = [{"kind": "material", "description": "Flex", "qty": 1, "unit_cost": "110", "markup_pct": "20"}]
+        lines, _, _ = normalize_lines(profile, [], spec, 2)
+        # 110 paid including 10% GST is 100 before tax; +20% markup = 120 before tax.
+        self.assertEqual(lines[0]["unit_price"], "120.00")
+        self.assertEqual(Decimal(lines[0]["unit_cost"]), Decimal("100"))
+
+    def test_bad_lines(self):
+        profile, book = self.store.profile(), self.store.pricebook()
+        for spec in (
+            [{"kind": "material", "description": "x", "qty": 1}],
+            [{"kind": "fee", "description": "x", "unit_price": 5, "tax_codes": ["VAT"]}],
+            [{"kind": "fee", "description": "x", "unit_price": 5, "qty": 0}],
+            [{"kind": "spaceship", "description": "x", "unit_price": 5}],
+            [{"kind": "text", "description": "only text"}],
+        ):
+            with self.assertRaises(JTPError):
+                normalize_lines(profile, book, spec, 2)
+
+
+class WorkflowTests(StoreCase):
+    def _quote(self, deposit=None):
+        spec = {
+            "title": "Water heater",
+            "options": [
+                {
+                    "name": "Good",
+                    "lines": [
+                        {"kind": "material", "description": "Tank", "qty": 1, "unit_cost": "800"},
+                        {"kind": "labour", "description": "Install", "qty": 4},
+                    ],
+                },
+                {
+                    "name": "Better",
+                    "recommended": True,
+                    "lines": [
+                        {"kind": "material", "description": "HE tank", "qty": 1, "unit_cost": "1200"},
+                        {"kind": "labour", "description": "Install", "qty": 4.5},
+                        {"kind": "discount", "percent": 5},
+                    ],
+                },
+            ],
+        }
+        if deposit:
+            spec["deposit_percent"] = deposit
+        return docs.quote_create(self.store, spec, customer_id=self.cust["id"])["quote"]
+
+    def test_quote_to_paid(self):
+        quote = self._quote(deposit=25)
+        docs.quote_mark_sent(self.store, quote["id"], "email", "jane@example.com")
+        with self.assertRaises(JTPError):
+            docs.quote_accept(self.store, quote["id"], None, None, None, None)
+        accepted = docs.quote_accept(self.store, quote["id"], "B", "Jane", "email", None)
+        job_id = accepted["job"]
+        docs.payment_record(self.store, job_id=job_id, amount=accepted["deposit_due"], method="Bank", deposit=True)
+        co = docs.co_create(
+            self.store,
+            job_id,
+            {
+                "title": "Extra valve",
+                "lines": [{"kind": "material", "description": "Valve", "qty": 1, "unit_cost": "20"}],
+            },
+        )["change_order"]
+        draft_co = docs.co_create(
+            self.store,
+            job_id,
+            {"title": "Not approved", "lines": [{"kind": "fee", "description": "Thing", "unit_price": "10"}]},
+        )["change_order"]
+        docs.co_approve(self.store, co["id"], "Jane", "sms", None)
+        records.job_log(
+            self.store, job_id, "material", {"description": "Connector", "qty": 1, "unit_cost": "10", "extra": True}
+        )
+        records.job_log(self.store, job_id, "time", {"hours": "6"})
+        result = docs.invoice_create(self.store, job_id=job_id)
+        inv = result["invoice"]
+        self.assertTrue(any(draft_co["id"] in w for w in result["warnings"]))
+        sources = [ln.get("source") or {} for ln in inv["lines"]]
+        self.assertTrue(any(s.get("change_order") == co["id"] for s in sources))
+        self.assertTrue(any(s.get("log") for s in sources))
+        issued = docs.invoice_issue(self.store, inv["id"])
+        self.assertEqual(issued["deposits_applied"][0]["amount"], accepted["deposit_due"])
+        state = docs.invoice_state(self.store.doc(inv["id"]), self.store.today())
+        with self.assertRaises(JTPError):
+            docs.payment_record(self.store, invoice_id=inv["id"], amount=str(state["balance"] + 1), method="Card")
+        docs.payment_record(self.store, invoice_id=inv["id"], amount=str(state["balance"]), method="Card")
+        self.assertEqual(self.store.doc(inv["id"])["status"], "paid")
+        self.assertEqual(self.store.job(job_id)["status"], "paid")
+
+    def test_progress_billing_bills_exact_net(self):
+        quote = self._quote()
+        job_id = docs.quote_accept(self.store, quote["id"], "B", None, None, None)["job"]
+        first = docs.invoice_create(self.store, job_id=job_id, progress="33")["invoice"]
+        docs.invoice_issue(self.store, first["id"])
+        with self.assertRaises(JTPError):
+            docs.invoice_create(self.store, job_id=job_id, progress="70")
+        second = docs.invoice_create(self.store, job_id=job_id, progress="33")["invoice"]
+        docs.invoice_issue(self.store, second["id"])
+        final = docs.invoice_create(self.store, job_id=job_id)["invoice"]
+        option = next(o for o in self.store.doc(quote["id"])["options"] if o["key"] == "B")
+        billed_net = sum(Decimal(i["totals"]["net_excl_tax"]) for i in (first, second, final))
+        self.assertEqual(billed_net, Decimal(option["totals"]["net_excl_tax"]))
+        with self.assertRaises(JTPError):
+            docs.invoice_create(self.store, job_id=job_id, from_quote=True)
+
+    def test_numbering_has_no_gaps(self):
+        first = docs.invoice_create(
+            self.store,
+            customer_id=self.cust["id"],
+            spec={"title": "A", "lines": [{"kind": "fee", "description": "x", "unit_price": 10}]},
+        )["invoice"]
+        second = docs.invoice_create(
+            self.store,
+            customer_id=self.cust["id"],
+            spec={"title": "B", "lines": [{"kind": "fee", "description": "y", "unit_price": 10}]},
+        )["invoice"]
+        with self.assertRaises(JTPError):
+            docs.invoice_delete(self.store, first["id"])
+        docs.invoice_delete(self.store, second["id"])
+        again = docs.invoice_create(
+            self.store,
+            customer_id=self.cust["id"],
+            spec={"title": "C", "lines": [{"kind": "fee", "description": "z", "unit_price": 10}]},
+        )["invoice"]
+        self.assertEqual(again["id"], second["id"])
+
+    def test_void_issued_invoice_releases_work(self):
+        job = records.job_create(self.store, self.cust["id"], "Leak", pricing="tm")
+        records.job_log(self.store, job["id"], "time", {"hours": "2"})
+        inv = docs.invoice_create(self.store, job_id=job["id"], tm=True)["invoice"]
+        docs.invoice_issue(self.store, inv["id"])
+        out = docs.invoice_void(self.store, inv["id"], "wrong customer")
+        self.assertEqual(out["credit_note"]["totals"]["total"], inv["totals"]["total"])
+        self.assertIsNone(self.store.job(job["id"])["log"][0]["invoice"])
+        again = docs.invoice_create(self.store, job_id=job["id"], tm=True)["invoice"]
+        self.assertEqual(again["totals"]["total"], inv["totals"]["total"])
+
+    def test_credit_note_exact_amount_across_tax_groups(self):
+        job = records.job_create(self.store, self.cust["id"], "Mixed", pricing="tm")
+        records.job_log(self.store, job["id"], "time", {"hours": "3.3"})
+        records.job_log(self.store, job["id"], "material", {"description": "Part", "qty": 1, "unit_cost": "77.77"})
+        inv = docs.invoice_create(self.store, job_id=job["id"], tm=True)["invoice"]
+        docs.invoice_issue(self.store, inv["id"])
+        for amount in ("0.01", "13.37", "99.99"):
+            credit = docs.credit_create(self.store, inv["id"], amount=amount, reason="Goodwill", dry_run=True)
+            self.assertEqual(credit["credit_note"]["totals"]["total"], amount)
+
+    def test_duplicate_payment_is_ignored(self):
+        inv = docs.invoice_create(
+            self.store,
+            customer_id=self.cust["id"],
+            spec={"title": "A", "lines": [{"kind": "fee", "description": "x", "unit_price": 100}]},
+        )["invoice"]
+        docs.invoice_issue(self.store, inv["id"])
+        docs.payment_record(self.store, invoice_id=inv["id"], amount="20", method="Cash")
+        dup = docs.payment_record(self.store, invoice_id=inv["id"], amount="20", method="Cash")
+        self.assertTrue(dup["duplicate"])
+        self.assertEqual(len(self.store.doc(inv["id"])["payments"]), 1)
+
+    def test_tax_must_be_confirmed(self):
+        profile = self.store.profile()
+        profile["tax"]["confirmed"] = False
+        self.store.save_profile(profile)
+        with self.assertRaises(JTPError):
+            self._quote()
+        preview = docs.quote_create(
+            self.store,
+            {"title": "x", "lines": [{"kind": "fee", "description": "x", "unit_price": 1}]},
+            customer_id=self.cust["id"],
+            dry_run=True,
+        )
+        self.assertEqual(preview["quote"]["id"], "PREVIEW")
+
+    def _issued(self, amount="100"):
+        spec = {"title": "A", "lines": [{"kind": "fee", "description": "Work", "unit_price": amount}]}
+        inv = docs.invoice_create(self.store, customer_id=self.cust["id"], spec=spec)["invoice"]
+        return docs.invoice_issue(self.store, inv["id"])["invoice"]
+
+    def test_deposit_only_above_threshold(self):
+        profile = self.store.profile()
+        profile["terms"]["deposit_percent"] = "25"
+        profile["terms"]["deposit_min_total"] = "1000"
+        self.store.save_profile(profile)
+        spec = {
+            "title": "Two sizes",
+            "options": [
+                {"name": "Small", "lines": [{"kind": "fee", "description": "Small job", "unit_price": "200"}]},
+                {"name": "Big", "lines": [{"kind": "fee", "description": "Big job", "unit_price": "2000"}]},
+            ],
+        }
+        quote = docs.quote_create(self.store, spec, customer_id=self.cust["id"], dry_run=True)["quote"]
+        self.assertIsNone(quote["options"][0]["deposit_due"])
+        self.assertEqual(quote["options"][1]["deposit_due"], "525.00")  # 25% of 2,100 incl. GST
+        explicit = docs.quote_create(
+            self.store, dict(spec, deposit_percent=25), customer_id=self.cust["id"], dry_run=True
+        )["quote"]
+        self.assertEqual(explicit["options"][0]["deposit_due"], "52.50")  # asked for, so always taken
+
+    def test_change_order_hours_count_as_quoted(self):
+        quote = self._quote()
+        job_id = docs.quote_accept(self.store, quote["id"], "A", "Jane", "email", None)["job"]
+        spec = {"title": "Extra", "lines": [{"kind": "labour", "description": "Reroute", "qty": 2}]}
+        co = docs.co_create(self.store, job_id, spec)["change_order"]
+        self.assertEqual(reports.job_summary(self.store, job_id)["hours_quoted"], "4")
+        docs.co_approve(self.store, co["id"], "Jane", "text", None)
+        self.assertEqual(reports.job_summary(self.store, job_id)["hours_quoted"], "6")
+
+    def test_full_credit_marks_invoice_credited(self):
+        inv = self._issued()
+        credit = docs.credit_create(self.store, inv["id"], amount="105", reason="Cancelled")["credit_note"]
+        state = docs.invoice_state(self.store.doc(inv["id"]), self.store.today())
+        self.assertEqual((state["status"], state["balance"]), ("credited", Decimal("0")))
+        sent = docs.credit_mark_sent(self.store, credit["id"], "email", "jane@example.com")
+        self.assertEqual(sent["credit_note"]["sent"][0]["channel"], "email")
+        again = docs.credit_mark_sent(self.store, credit["id"], "email", "jane@example.com")
+        self.assertTrue(again["already_recorded"])
+
+    def test_cash_basis_tax_follows_payments(self):
+        inv = self._issued("1000")  # 1,050.00 including 5% GST
+        docs.payment_record(self.store, invoice_id=inv["id"], amount="420", method="Cash")
+        os.environ["JTP_TODAY"] = "2026-11-02"
+        docs.payment_record(self.store, invoice_id=inv["id"], amount="630", method="Cash")
+        october = reports.tax_report(self.store, "2026-10-01", "2026-10-31", basis="cash")
+        november = reports.tax_report(self.store, "2026-11-01", "2026-11-30", basis="cash")
+        accrual = reports.tax_report(self.store, "2026-10-01", "2026-10-31")
+        self.assertEqual(october["taxes"]["GST"]["tax_charged"], "$20.00")
+        self.assertEqual(november["taxes"]["GST"]["tax_charged"], "$30.00")
+        self.assertEqual(accrual["taxes"]["GST"]["tax_charged"], "$50.00")
+
+    def test_exports_include_credit_notes(self):
+        inv = self._issued()
+        docs.credit_create(self.store, inv["id"], amount="21", reason="Goodwill")
+        with open(reports.export(self.store, "invoices", None)["file"], encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        credit = [r for r in rows if r["type"] == "credit_note"]
+        self.assertEqual((credit[0]["total"], credit[0]["credits_invoice"]), ("-21.00", inv["id"]))
+        with open(reports.export(self.store, "lines", None)["file"], encoding="utf-8") as handle:
+            lines = [r for r in csv.DictReader(handle) if r["type"] == "credit_note"]
+        self.assertEqual(lines[0]["net_excl_tax"], "-20.00")
+
+    def test_preview_without_a_customer(self):
+        spec = {"title": "Sample", "lines": [{"kind": "fee", "description": "Call-out", "unit_price": 10}]}
+        quote = docs.quote_create(self.store, spec, dry_run=True)["quote"]
+        self.assertEqual((quote["id"], quote["customer_id"]), ("PREVIEW", "SAMPLE"))
+        self.assertFalse(self.store.docs("quote") or self.store.jobs())
+        result = render_doc(self.store, quote, fmt="html", engine="builtin")
+        html = Path(result["files"]["html"]).read_text(encoding="utf-8")
+        self.assertIn("Sample Customer", html)
+        self.assertIn("DRAFT", html)
+
+    def test_reminder_ladder(self):
+        inv = docs.invoice_create(
+            self.store,
+            customer_id=self.cust["id"],
+            spec={"title": "A", "lines": [{"kind": "fee", "description": "x", "unit_price": 100}]},
+        )["invoice"]
+        docs.invoice_issue(self.store, inv["id"])
+        docs.invoice_mark_sent(self.store, inv["id"], "email", "jane@example.com")
+        seen = []
+        for day, expected in (("2026-10-27", 1), ("2026-10-30", 2), ("2026-11-05", 3), ("2026-11-29", 5)):
+            os.environ["JTP_TODAY"] = day
+            due = [a for a in followups.due_actions(self.store) if a["action"] == "payment_reminder"]
+            seen.append(due[0]["stage"] if due else None)
+            self.assertEqual(due[0]["stage"], expected)
+        followups.mark_done(self.store, inv["id"], 5, "email", None)
+        self.assertFalse([a for a in followups.due_actions(self.store) if a["action"] == "payment_reminder"])
+
+    def test_brief_and_reports(self):
+        tmp = Store(Path(self.tmp.name) / "demo")
+        seed(tmp)
+        brief = reports.brief(tmp)
+        self.assertTrue(brief["owed"]["overdue"])
+        self.assertIn("Money brief", brief["text"])
+        self.assertIn("TAX", reports.tax_report(tmp)["taxes"])
+        self.assertTrue(reports.search(tmp, "jane")["customers"])
+
+
+class RenderTests(StoreCase):
+    def test_pdf_and_html(self):
+        quote = docs.quote_create(
+            self.store,
+            {
+                "title": "Ünïcödé-ish café work — 2 options",
+                "options": [
+                    {"name": "A", "lines": [{"kind": "fee", "description": "Thing " * 40, "unit_price": "10"}] * 30},
+                    {"name": "B", "lines": [{"kind": "fee", "description": "Other", "unit_price": "20"}]},
+                ],
+            },
+            customer_id=self.cust["id"],
+        )["quote"]
+        result = render_doc(self.store, self.store.doc(quote["id"]), fmt="both", engine="builtin")
+        pdf = Path(result["files"]["pdf"]).read_bytes()
+        self.assertTrue(pdf.startswith(b"%PDF-1.4"))
+        self.assertIn(b"%%EOF", pdf[-20:])
+        self.assertGreater(pdf.count(b"/Type /Page "), 1)
+        html = Path(result["files"]["html"]).read_text(encoding="utf-8")
+        self.assertIn("Ünïcödé-ish", html)
+        self.assertNotIn("unit_cost", html)
+
+    def test_costs_never_reach_customer_documents(self):
+        quote = docs.quote_create(
+            self.store,
+            {
+                "title": "Secret margins",
+                "lines": [{"kind": "material", "description": "Widget", "qty": 1, "unit_cost": "123.45"}],
+            },
+            customer_id=self.cust["id"],
+        )["quote"]
+        result = render_doc(self.store, self.store.doc(quote["id"]), fmt="html", engine="builtin")
+        html = Path(result["files"]["html"]).read_text(encoding="utf-8")
+        self.assertNotIn("123.45", html)
+        self.assertIn("154.31", html)
+
+    def test_png_logo_decoding(self):
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+        raw = b"".join(b"\x00" + bytes([255, 0, 0, 128]) * 2 for _ in range(2))
+        png = (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b"")
+        )
+        width, height, rgb = _png_decode(png)
+        self.assertEqual((width, height), (2, 2))
+        self.assertEqual(rgb[:3], bytes([255, 127, 127]))
+
+
+class CliTests(unittest.TestCase):
+    def run_cli(self, home, *args, stdin=None):
+        env = dict(os.environ, JTP_TODAY="2026-10-15")
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "jtp.py"), "--home", str(home), *args],
+            capture_output=True,
+            text=True,
+            input=stdin,
+            env=env,
+        )
+        return proc.returncode, json.loads(proc.stdout)
+
+    def test_cli_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            code, out = self.run_cli(home, "quote", "list")
+            self.assertEqual((code, out["ok"], out["code"]), (1, False, "not_initialized"))
+            self.assertEqual(self.run_cli(home, "init", "--currency", "GBP")[1]["created"], True)
+            for key, value in (
+                ("business.name", "Test Ltd"),
+                ("business.email", "a@b.example"),
+                ("tax.taxes", '[{"code":"VAT","name":"VAT","rate":"20"}]'),
+                ("tax.confirmed", "true"),
+                ("rates.labour", '[{"key":"standard","name":"Labour","rate":"60"}]'),
+                ("payment.methods", '[{"name":"Bank","instructions":"12-34-56 12345678"}]'),
+            ):
+                self.assertTrue(self.run_cli(home, "profile", "set", key, value)[1]["ok"])
+            self.assertTrue(self.run_cli(home, "profile", "check")[1]["ready_for_invoices"])
+            cust = self.run_cli(home, "customer", "add", "--name", "Sam", "--phone", "07700 900123")[1]["customer"]
+            code, out = self.run_cli(
+                home,
+                "quote",
+                "create",
+                "--customer",
+                cust["id"],
+                "--title",
+                "Tap",
+                "--spec",
+                "-",
+                stdin='[{"kind":"labour","description":"Fix tap","qty":1.5}]',
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("£108.00", out["summary"])
+            code, out = self.run_cli(home, "quote", "accept", out["quote"]["id"])
+            self.assertEqual(code, 0)
+            code, out = self.run_cli(home, "invoice", "create", "--job", out["job"])
+            self.assertEqual(code, 0)
+            code, out = self.run_cli(home, "invoice", "issue", out["invoice"]["id"])
+            self.assertIn("£108.00", out["summary"])
+            self.assertNotIn("lines", out["invoice"])  # status changes print the short form
+            inv_id = out["invoice"]["id"]
+            code, out = self.run_cli(home, "invoice", "mark-sent", inv_id, "--channel", "email", "--to", "s@x.example")
+            self.assertTrue(Path(out["sent_copy"]).is_file())
+            code, out = self.run_cli(
+                home, "credit", "create", "--invoice", inv_id, "--amount", "12", "--reason", "Oops"
+            )
+            self.assertEqual(code, 0)
+            code, out = self.run_cli(home, "credit", "mark-sent", out["credit_note"]["id"], "--channel", "email")
+            self.assertEqual((code, out["credit_note"]["sent"][0]["channel"]), (0, "email"))
+            code, out = self.run_cli(home, "report", "tax", "--basis", "cash")
+            self.assertEqual((code, out["basis"]), (0, "cash"))
+            code, out = self.run_cli(
+                home, "quote", "create", "--dry-run", "--spec", '[{"kind":"fee","description":"x","unit_price":5}]'
+            )
+            self.assertTrue(Path(out["files"]["PREVIEW"]["pdf"]).is_file())
+            code, out = self.run_cli(home, "brief")
+            self.assertEqual(code, 0)
+            code, out = self.run_cli(home, "invoice", "frobnicate")
+            self.assertEqual((code, out["code"]), (2, "usage"))
+
+
+if __name__ == "__main__":
+    unittest.main()
