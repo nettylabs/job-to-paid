@@ -95,6 +95,24 @@ def _keep_sent_copy(store, args, doc, out: dict) -> None:
         out.setdefault("warnings", []).append(f"Recorded as sent, but no copy of the PDF was kept: {exc}")
 
 
+def _keep_quoted_copy(store, args, doc, out: dict) -> None:
+    """Accepted without being marked sent: keep the PDF as the customer saw it, before it's redrawn as accepted."""
+    if getattr(args, "no_render", False) or doc.get("sent"):
+        return  # a quote marked sent already has its copy in output/sent/
+    source = store.output_dir / f"{doc['id']}.pdf"
+    if not source.exists():
+        return
+    rev = f"-r{doc['revision']}" if doc.get("revision", 1) > 1 else ""
+    target = store.output_dir / "sent" / f"{doc['id']}{rev}-as-quoted.pdf"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            shutil.copyfile(source, target)
+        out["as_quoted_copy"] = str(target)
+    except OSError as exc:
+        out.setdefault("warnings", []).append(f"Couldn't keep a copy of the quote as it was: {exc}")
+
+
 def _money(store, value) -> str:
     from .money import format_money
 
@@ -629,6 +647,8 @@ def cmd_quote(store, args):
             out["next"] = (
                 f"If the owner says yes, retire each one: jtp quote supersede <id> --with {out['quote']['id']}"
             )
+        if not out.get("already_recorded"):
+            _keep_quoted_copy(store, args, out["quote"], out)
         if out.get("replaced_quotes"):
             out["note"] = (
                 f"Also marked {', '.join(out['replaced_quotes'])} as replaced (other quotes on this job), so they "

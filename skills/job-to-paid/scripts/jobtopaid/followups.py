@@ -300,6 +300,7 @@ def _flag_replaced_quotes(store, actions: list, quotes: list, accepted_by_custom
         if later:
             other = later[-1]
             when = format_date(from_iso(other["accepted"]["date"]), fmt)
+            action["accepted_instead"] = {"quote": other["id"], "title": other["title"], "date_display": when}
             action["heads_up"] = (
                 f"The customer accepted {other['id']} ({other['title']}) on {when}. If that replaced this quote, "
                 f"don't chase it: jtp quote supersede {doc['id']} --with {other['id']}. Otherwise ask the owner first."

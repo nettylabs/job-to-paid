@@ -443,10 +443,26 @@ def brief(store, day=None) -> dict:
             f"{row['hours_quoted']} h quoted)"
         )
     lines.append(f"Paid this week: {disp_fmt(paid_week)}; this month: {disp_fmt(paid_month)}")
-    if actions:
-        parts = ", ".join(_plural(n, ACTION_WORDS.get(name, name.replace("_", " "))) for name, n in counts.items())
+    ready = [a for a in actions if not a.get("heads_up")]
+    held = [a for a in actions if a.get("heads_up")]
+    if ready:
+        ready_counts = defaultdict(int)
+        for action in ready:
+            ready_counts[action["action"]] += 1
+        parts = ", ".join(
+            _plural(n, ACTION_WORDS.get(name, name.replace("_", " "))) for name, n in ready_counts.items()
+        )
         lines.append(f"Ready for your OK today: {parts}")
-    else:
+    if held:
+        lines.append("Check with you first (don't chase yet):")
+        for action in held[:3]:
+            other = action.get("accepted_instead") or {}
+            who = (action.get("customer") or {}).get("display_name") or "The customer"
+            lines.append(
+                f"  - {action['doc']}: {who} accepted {other.get('quote')} on {other.get('date_display')}. "
+                f"Is {action['doc']} still open, or was it replaced?"
+            )
+    if not actions:
         lines.append("Nothing to chase today.")
     if check["missing"]:
         lines.append("Setup still needed: " + "; ".join(check["missing"]))

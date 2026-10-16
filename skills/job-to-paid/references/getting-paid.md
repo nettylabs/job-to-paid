@@ -13,6 +13,8 @@ jtp payment list --from 2026-10-01
 
 - A payment larger than the balance is refused. Record the balance and tell the owner about the
   overpayment.
+- Use the owner's names for payment methods (`jtp profile show --section payment`). A close match is
+  stored under the owner's name; anything else is recorded as given with a warning to check with them.
 - Recording the same payment twice in a row is caught (`"duplicate": true`). Use
   `--allow-duplicate` only when it really is a second payment for the same amount.
 - When an invoice becomes fully paid, offer: a thank-you with receipt, and a review request if the
@@ -83,6 +85,7 @@ jtp brief --text   # ready-to-send short summary
 
 It shows: what's owed and overdue, quotes waiting (and expiring), work not billed yet (finished
 jobs, logged extras, approved change orders), jobs running over quoted hours, money in this week
-and month, and the count of follow-ups waiting for approval. Lead with the one or two things that
+and month, and the count of follow-ups waiting for approval. Follow-ups listed under "Check with you
+first" are quotes the customer may have replaced: ask the owner before drafting anything for them. Lead with the one or two things that
 earn money fastest, e.g. "INV-0003 is 26 days overdue, want me to send the firm reminder?" or
 "The Smith job is finished but not invoiced, invoice it now?"

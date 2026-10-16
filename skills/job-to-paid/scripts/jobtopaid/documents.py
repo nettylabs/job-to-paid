@@ -1432,7 +1432,7 @@ def payment_record(
     if value <= 0:
         raise JTPError("A payment must be more than zero.")
     day = iso(parse_date(date or "today", store.today()))
-    method = (method or "").strip()
+    method, method_note = _payment_method(store, method)
     reference = (reference or "").strip()
     if invoice_id:
         inv = store.doc(invoice_id, "invoice")
@@ -1475,7 +1475,10 @@ def payment_record(
         _update_job_after_money(store, job)
         store.save_job(job)
         store.log("payment.record", payment["id"], invoice=inv["id"], amount=payment["amount"], method=method)
-        return {"payment": payment, "invoice": inv, "balance": str(invoice_state(inv, store.today())["balance"])}
+        out = {"payment": payment, "invoice": inv, "balance": str(invoice_state(inv, store.today())["balance"])}
+        if method_note:
+            out["warnings"] = [method_note]
+        return out
     if job_id:
         job = store.job(job_id)
         dup = None if allow_duplicate else _find_duplicate(job.get("payments", []), value, day, method, reference)
@@ -1500,8 +1503,25 @@ def payment_record(
             "payment": payment,
             "job": job["id"],
             "note": "Held on the job; it comes off the next invoice automatically when you issue it.",
+            "warnings": [method_note] if method_note else [],
         }
     raise JTPError("Say which invoice (INV-...) or which job (--job) the payment is for.")
+
+
+def _payment_method(store, method: str | None) -> tuple:
+    """(method, note): the owner's own name for a method when it matches one of theirs, else a heads-up."""
+    method = (method or "").strip()
+    known = [m.get("name", "").strip() for m in store.profile()["payment"].get("methods") or [] if m.get("name")]
+    if not method or not known:
+        return method, None
+    lower = method.lower()
+    for name in known:
+        if lower == name.lower() or lower in name.lower() or name.lower() in lower:
+            return name, None
+    return method, (
+        f"Recorded as '{method}', which isn't one of the payment methods on your documents ({', '.join(known)}). "
+        "Check with the owner that it's right."
+    )
 
 
 def payment_undo(store, payment_id: str) -> dict:

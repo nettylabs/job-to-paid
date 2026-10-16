@@ -153,7 +153,8 @@ jtp quote extend Q-0001 --days 14            # expired or about to expire
   other open quotes on the same job are marked as replaced automatically and stop getting follow-ups;
   tell the owner which ones (the output lists them). If the customer has open quotes on *other* jobs,
   the output asks (`ask_owner`) whether this acceptance replaces any of them. If the owner says yes,
-  retire each one: `jtp quote supersede Q-0002 --with Q-0004`. If there's a deposit, the output
+  retire each one: `jtp quote supersede Q-0002 --with Q-0004`. If the quote was never marked sent,
+  the PDF as quoted is kept in `output/sent/` (`as_quoted_copy`) before it's redrawn as accepted. If there's a deposit, the output
   says how much (`deposit_due_display`); send a deposit request if they haven't paid (messages.md). When it arrives,
   record it with `jtp payment record --job J-0004 --deposit --amount <amount> --method "e-Transfer"
   --reference <their reference>`. If the owner gives a percentage instead ("she paid the 25%"), use

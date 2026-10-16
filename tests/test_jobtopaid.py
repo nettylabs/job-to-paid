@@ -521,6 +521,9 @@ class WorkflowTests(StoreCase):
         os.environ["JTP_TODAY"] = "2026-10-20"
         nudge = next(a for a in followups.due_actions(self.store) if a.get("doc") == old["id"])
         self.assertIn(f"jtp quote supersede {old['id']} --with {created['quote']['id']}", nudge["heads_up"])
+        brief = reports.brief(self.store)["text"]  # the short text says to check first, not to chase
+        self.assertIn(f"Check with you first (don't chase yet):\n  - {old['id']}: Jane Doe accepted", brief)
+        self.assertNotIn("quote follow-up", brief)
         docs.quote_supersede(self.store, old["id"], created["quote"]["id"])
         self.assertFalse([a for a in followups.due_actions(self.store) if a.get("doc") == old["id"]])
 
@@ -640,6 +643,20 @@ class WorkflowTests(StoreCase):
         docs.invoice_issue(self.store, inv["id"])
         pdf = Path(render_doc(self.store, self.store.doc(inv["id"]), engine="builtin")["files"]["pdf"]).read_bytes()
         self.assertEqual(pdf.count(b"/Type /Page "), 1)
+
+    def test_payment_methods_use_the_owners_wording(self):
+        profile = self.store.profile()
+        profile["payment"]["methods"] = [
+            {"name": "Interac e-Transfer", "instructions": "pay@x.example"},
+            {"name": "Card", "instructions": "Call us"},
+        ]
+        self.store.save_profile(profile)
+        quote = self._fixed_quote([{"kind": "fee", "description": "Work", "unit_price": "1000"}])
+        job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+        same = docs.payment_record(self.store, job_id=job_id, amount="100", method="e-transfer", deposit=True)
+        self.assertEqual((same["payment"]["method"], same["warnings"]), ("Interac e-Transfer", []))
+        other = docs.payment_record(self.store, job_id=job_id, amount="50", method="Bank transfer", deposit=True)
+        self.assertIn("isn't one of the payment methods", other["warnings"][0])
 
     def test_reminder_ladder(self):
         inv = docs.invoice_create(
@@ -779,6 +796,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("£108.00", out["summary"])
             code, out = self.run_cli(home, "quote", "accept", out["quote"]["id"])
             self.assertEqual(code, 0)
+            self.assertTrue(Path(out["as_quoted_copy"]).is_file())  # never marked sent: keep what was quoted
             job = out["job"]
             code, out = self.run_cli(
                 home, "payment", "record", "--job", job, "--deposit", "--percent", "25", "--method", "Bank"
