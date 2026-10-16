@@ -245,6 +245,13 @@ def _base(ctx: _Ctx, doc: dict, title_key: str) -> dict:
     }
 
 
+def _signed_off(ctx: _Ctx, template: str, record: dict, customer: dict) -> str:
+    """'Approved by Jane Doe on 15 Oct 2026 (text message)' from a label like 'Approved by {name} on {date}'."""
+    name = record.get("by") or (customer.get("lines") or [""])[0]
+    text = template.replace("{name}", name).replace("{date}", ctx.date(record.get("date")))
+    return f"{text} ({record['method']})" if record.get("method") else text
+
+
 def build_view(store, doc: dict) -> dict:
     view = _build_view(store, doc)
     # A preview has no real job number yet, so leave that row off.
@@ -323,9 +330,8 @@ def _build_view(store, doc: dict) -> dict:
         }
         if doc["status"] == "accepted" and doc.get("accepted"):
             acc = doc["accepted"]
-            view["acceptance"]["text"] = (
-                f"{labels['option']} {acc['option']} - {acc.get('by') or ''} {ctx.date(acc.get('date'))}"
-            ).strip()
+            text = _signed_off(ctx, labels["accepted_by"], acc, view["customer"])
+            view["acceptance"]["text"] = f"{labels['option']} {acc['option']}: {text}" if len(options) > 1 else text
         if doc["status"] == "void":
             view["stamp"] = labels["void_stamp"]
         elif doc["status"] == "superseded":
@@ -351,7 +357,7 @@ def _build_view(store, doc: dict) -> dict:
             view["acceptance"] = {
                 "heading": labels["accept_heading"],
                 "signature": False,
-                "text": f"{appr.get('by') or ''} {ctx.date(appr.get('date'))} {appr.get('method') or ''}".strip(),
+                "text": _signed_off(ctx, labels["approved_by"], appr, view["customer"]),
             }
         else:
             view["acceptance"] = {
@@ -383,8 +389,15 @@ def _build_view(store, doc: dict) -> dict:
         from .documents import invoice_state  # avoid import cycle at module load
 
         state = invoice_state(doc, store.today())
-        paid = sum((to_decimal(p["amount"]) for p in doc.get("payments", [])), to_decimal(0))
+        deposits = [p for p in doc.get("payments", []) if p.get("from_deposit")]
+        held = sum((to_decimal(p["amount"]) for p in deposits), to_decimal(0))
+        paid = sum((to_decimal(p["amount"]) for p in doc.get("payments", [])), to_decimal(0)) - held
         credits = sum((to_decimal(c["amount"]) for c in doc.get("credits", [])), to_decimal(0))
+        if held:
+            label = labels["deposit_received"]
+            if len({p["date"] for p in deposits}) == 1:
+                label += f" ({ctx.date(deposits[0]['date'])})"
+            view["totals"].append({"label": label, "value": ctx.money(-held), "strong": False})
         if paid:
             view["totals"].append({"label": labels["payments_received"], "value": ctx.money(-paid), "strong": False})
         if credits:
@@ -443,7 +456,7 @@ def build_receipt_view(store, payment: dict, invoice: dict | None, job: dict) ->
         meta.append((labels["for_invoice"], invoice["id"]))
     meta.append((labels["job"], job["id"]))
     view["meta"] = meta
-    view["customer"] = _customer(ctx, job["customer_id"], labels["bill_to"])
+    view["customer"] = _customer(ctx, job["customer_id"], labels["received_from"])
     view["site"] = None
     if invoice:
         desc = f"{labels['payment_received']} - {labels['for_invoice']} {invoice['id']}: {invoice.get('title', '')}"
@@ -455,6 +468,7 @@ def build_receipt_view(store, payment: dict, invoice: dict | None, job: dict) ->
             "subheading": "",
             "badge": "",
             "totals": None,
+            "simple": True,  # description and amount only
             "rows": [
                 {"desc": desc, "qty": "", "unit_price": "", "amount": ctx.money(payment["amount"]), "style": "item"}
             ],

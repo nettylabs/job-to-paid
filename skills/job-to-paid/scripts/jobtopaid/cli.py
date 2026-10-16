@@ -66,7 +66,9 @@ def _render(store, args, doc, out: dict):
     if getattr(args, "no_render", False):
         return
     try:
-        result = render_doc(store, doc)
+        # Previews go to their own folder so they can't be mistaken for a document to send.
+        folder = store.home / "previews" if doc["id"] == docs.PREVIEW_ID else None
+        result = render_doc(store, doc, out_dir=folder)
         out.setdefault("files", {})[doc["id"]] = result["files"]
         if result["warnings"]:
             out.setdefault("warnings", []).extend(result["warnings"])
@@ -459,8 +461,16 @@ def cmd_job(store, args):
         )
         return {"job": job, "summary": f"Job {job['id']}: {job['title']} for {_cust_name(store, job['customer_id'])}"}
     if args.action == "list":
-        jobs = records.job_list(store, args.status or "open", args.search, args.customer)
-        return {"jobs": jobs, "count": len(jobs)}
+        status = args.status or "open"
+        jobs = records.job_list(store, status, args.search, args.customer)
+        out = {"jobs": jobs, "count": len(jobs)}
+        hidden = len(records.job_list(store, "all", args.search, args.customer)) - len(jobs) if status == "open" else 0
+        if hidden:
+            out["hint"] = (
+                f"Showing open jobs only; {hidden} more {'is' if hidden == 1 else 'are'} paid, closed or lost. "
+                "See every job with: jtp job list --status all"
+            )
+        return out
     if args.action == "show":
         job = store.job(args.id)
         return {"job": job, "money": reports.job_summary(store, job["id"])}
@@ -1010,7 +1020,7 @@ QUOTE_SPEC_HELP = """Spec format (JSON):
 unit_cost is what the owner pays (markup is added); a bare figure from the owner is a cost.
 Add "estimate": true to a line whose price still needs confirming.
 Add "tax_codes": [] (no tax) or ["GST"] only when the owner says that line is taxed differently.
---dry-run prices it without saving and writes output/PREVIEW.pdf to show the owner."""
+--dry-run prices it without saving and writes previews/PREVIEW.pdf to show the owner."""
 
 
 FLAG_HELP = {
@@ -1023,7 +1033,7 @@ FLAG_HELP = {
     "--to": "Where it went (email address or phone number)",
     "--option": "The option the customer chose (A, B, C...)",
     "--by": "Who accepted or approved (customer name)",
-    "--method": "How: email, text message, signed PDF, in person... (payments: e-Transfer, card, cash...)",
+    "--method": "How they said yes: email, text message, signed PDF, phone, in person",
     "--note": "Free text kept on record",
     "--reason": "Why (kept on record)",
     "--date": "YYYY-MM-DD, today, yesterday, or +N / -N days (default: today)",
@@ -1258,7 +1268,7 @@ def build_parser() -> argparse.ArgumentParser:
         "quote",
         "Create, revise, send-track, accept or decline quotes.\n\n" + QUOTE_SPEC_HELP,
         [
-            "jtp quote create --customer C-0001 --spec quote.json --dry-run   (totals + output/PREVIEW.pdf)",
+            "jtp quote create --customer C-0001 --spec quote.json --dry-run   (totals + previews/PREVIEW.pdf)",
             "jtp quote create --spec quote.json --dry-run   (a sample PDF before any customer exists)",
             "jtp quote create --job J-0002 --spec quote.json",
             "jtp quote mark-sent Q-0001 --channel email --to jane@example.com",
@@ -1295,7 +1305,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         p.add_argument(flag, help=FLAG_HELP.get(flag))
     p.add_argument("--days", type=int)
-    p.add_argument("--dry-run", action="store_true", help="Price it without saving (writes output/PREVIEW.pdf)")
+    p.add_argument("--dry-run", action="store_true", help="Price it without saving (writes previews/PREVIEW.pdf)")
     p.add_argument("--with", dest="with_quote", help="The quote that replaced this one (supersede)")
     p.add_argument("--as-spec", action="store_true", help="Show as an editable spec")
 
@@ -1315,7 +1325,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", nargs="?")
     for flag in ("--job", "--spec", "--channel", "--to", "--by", "--method", "--note", "--reason", "--date"):
         p.add_argument(flag, help=FLAG_HELP.get(flag))
-    p.add_argument("--dry-run", action="store_true", help="Preview it (output/PREVIEW.pdf) without saving")
+    p.add_argument("--dry-run", action="store_true", help="Preview it (previews/PREVIEW.pdf) without saving")
 
     p = _add(
         sub,
@@ -1369,7 +1379,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="The owner confirmed the lines that were estimates (issue)",
     )
-    p.add_argument("--dry-run", action="store_true", help="Preview it (output/PREVIEW.pdf) without saving")
+    p.add_argument("--dry-run", action="store_true", help="Preview it (previews/PREVIEW.pdf) without saving")
     p.add_argument("--as-spec", action="store_true")
 
     p = _add(
@@ -1388,7 +1398,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", nargs="?")
     for flag in ("--invoice", "--amount", "--reason", "--spec", "--channel", "--to", "--date"):
         p.add_argument(flag, help=FLAG_HELP.get(flag))
-    p.add_argument("--dry-run", action="store_true", help="Preview it (output/PREVIEW.pdf) without saving")
+    p.add_argument("--dry-run", action="store_true", help="Preview it (previews/PREVIEW.pdf) without saving")
 
     p = _add(
         sub,
@@ -1406,8 +1416,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("action", choices=["record", "list", "undo", "receipt"])
     p.add_argument("id_or_invoice", nargs="?", metavar="ID")
-    for flag in ("--job", "--amount", "--method", "--date", "--reference", "--note"):
+    for flag in ("--job", "--amount", "--date", "--reference", "--note"):
         p.add_argument(flag, help=FLAG_HELP.get(flag))
+    p.add_argument("--method", help="How they paid: e-Transfer, card, cash, cheque, bank transfer...")
     p.add_argument("--from", dest="start")
     p.add_argument("--to", dest="end")
     p.add_argument("--deposit", action="store_true", help="Money in before invoicing, held on the job (with --job)")

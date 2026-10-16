@@ -37,15 +37,21 @@ DEMO_REGIONS = {
             "Demo Bank, routing 000000000, account 12345678. Please use {number} as the reference.",
         ),
     },
-    "CAD": {
-        "business": (["100 Example Street", "Toronto ON M5V 2T6"], "+1 416 555 0100"),
+    "CAD": {  # British Columbia: GST on everything, PST on materials and equipment
+        "business": (["100 Example Street", "Vancouver BC V6B 1A1"], "+1 604 555 0100"),
         "customers": [
-            (["12 Maple Avenue", "Toronto ON M4C 1B5"], "+1 416 555 0142"),
-            (["5 Market Square", "Mississauga ON L5B 3C2"], "+1 905 555 0177"),
-            (["88 Hillside Road", "Oakville ON L6J 1H1"], "+1 905 555 0190"),
+            (["12 Maple Avenue", "Burnaby BC V5H 2E2"], "+1 604 555 0142"),
+            (["5 Market Square", "Surrey BC V3T 2W1"], "+1 604 555 0177"),
+            (["88 Hillside Road", "North Vancouver BC V7L 1A1"], "+1 604 555 0190"),
         ],
-        "registration": [{"label": "HST No.", "value": "123456789 RT0001"}],
-        "taxes": [{"code": "HST", "name": "HST", "rate": "13", "applies_to": EVERY_KIND}],
+        "registration": [
+            {"label": "GST No.", "value": "123456789 RT0001"},
+            {"label": "PST No.", "value": "PST-1234-5678"},
+        ],
+        "taxes": [
+            {"code": "GST", "name": "GST", "rate": "5", "applies_to": EVERY_KIND},
+            {"code": "PST", "name": "PST", "rate": "7", "applies_to": ["material", "equipment"]},
+        ],
         "bank": ("Interac e-Transfer", "Send to pay@demo-plumbing.example and put {number} in the message."),
     },
     "GBP": {
@@ -100,6 +106,7 @@ def demo_profile(currency: str = "USD") -> dict:
             "address": list(address),
             "phone": phone,
             "email": "office@demo-plumbing.example",
+            "owner_name": "Sam",
             "registration_numbers": [dict(r) for r in region["registration"]],
         }
     )
@@ -229,7 +236,7 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
     made["overdue_invoice"] = inv["id"]
 
     # A paid fixed-price job with an annual service reminder.
-    job2 = records.job_create(store, priya["id"], "Annual furnace service", tags="furnace,service")
+    job2 = records.job_create(store, jane["id"], "Annual furnace service", tags="furnace,service")
     quote = docs.quote_create(
         store,
         {
@@ -241,8 +248,8 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
         },
         job_id=job2["id"],
     )["quote"]
-    docs.quote_mark_sent(store, quote["id"], "email", priya["email"], date=iso(today - _dt.timedelta(days=70)))
-    docs.quote_accept(store, quote["id"], None, "Priya Patel", "email", None, date=iso(today - _dt.timedelta(days=69)))
+    docs.quote_mark_sent(store, quote["id"], "email", jane["email"], date=iso(today - _dt.timedelta(days=70)))
+    docs.quote_accept(store, quote["id"], None, "Jane Doe", "email", None, date=iso(today - _dt.timedelta(days=69)))
     records.job_log(
         store, job2["id"], "time", {"hours": "1.75", "who": "Sam", "date": iso(today - _dt.timedelta(days=62))}
     )
@@ -253,7 +260,7 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
     )
     inv2 = docs.invoice_create(store, job_id=job2["id"])["invoice"]
     docs.invoice_issue(store, inv2["id"], date=iso(today - _dt.timedelta(days=62)))
-    docs.invoice_mark_sent(store, inv2["id"], "email", priya["email"], date=iso(today - _dt.timedelta(days=62)))
+    docs.invoice_mark_sent(store, inv2["id"], "email", jane["email"], date=iso(today - _dt.timedelta(days=62)))
     state = docs.invoice_state(store.doc(inv2["id"], "invoice"), today)
     docs.payment_record(
         store,
@@ -304,13 +311,13 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
             },
         ],
     }
-    quote3 = docs.quote_create(store, spec, customer_id=jane["id"])["quote"]
+    quote3 = docs.quote_create(store, spec, customer_id=priya["id"])["quote"]
     sent_day = today - _dt.timedelta(days=3)
     doc = store.doc(quote3["id"], "quote")
     doc["date"] = iso(sent_day)
     doc["valid_until"] = iso(sent_day + _dt.timedelta(days=30))
     store.save_doc(doc)
-    docs.quote_mark_sent(store, quote3["id"], "email", jane["email"], date=iso(sent_day))
+    docs.quote_mark_sent(store, quote3["id"], "email", priya["email"], date=iso(sent_day))
     made["waiting_quote"] = quote3["id"]
     for ident in (inv["id"], inv2["id"], quote3["id"], quote["id"]):
         try:
@@ -392,7 +399,7 @@ def selftest() -> dict:
             check("follow-ups due (reminder + quote follow-up)", {"payment_reminder", "quote_followup"} <= kinds, kinds)
 
             quote_id = made["waiting_quote"]
-            accepted = docs.quote_accept(store, quote_id, "B", "Jane Doe", "email", "Go with B")
+            accepted = docs.quote_accept(store, quote_id, "B", "Priya Patel", "email", "Go with B")
             job_id = accepted["job"]
             check("accept option B", store.doc(quote_id)["status"] == "accepted")
             co = docs.co_create(
@@ -407,7 +414,7 @@ def selftest() -> dict:
                     ],
                 },
             )
-            docs.co_approve(store, co["change_order"]["id"], "Jane Doe", "text message", None)
+            docs.co_approve(store, co["change_order"]["id"], "Priya Patel", "text message", None)
             records.job_log(store, job_id, "time", {"hours": "5.5", "who": "Sam"})
             records.job_log(
                 store,

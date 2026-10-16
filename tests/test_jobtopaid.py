@@ -6,6 +6,7 @@ python3 -m unittest discover -s tests -v
 import csv
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -25,7 +26,7 @@ from jobtopaid.demo import demo_profile, seed  # noqa: E402
 from jobtopaid.money import compute_totals, currency_display, format_money  # noqa: E402
 from jobtopaid.pdf import _png_decode  # noqa: E402
 from jobtopaid.pricing import normalize_lines  # noqa: E402
-from jobtopaid.render import render_doc  # noqa: E402
+from jobtopaid.render import render_doc, render_receipt  # noqa: E402
 from jobtopaid.store import Store  # noqa: E402
 from jobtopaid.util import JTPError, to_decimal  # noqa: E402
 
@@ -560,11 +561,56 @@ class WorkflowTests(StoreCase):
     def test_demo_looks_local(self):
         ca = Store(Path(self.tmp.name) / "demo-ca")
         seed(ca, "CAD")
-        self.assertEqual([t["code"] for t in ca.profile()["tax"]["taxes"]], ["HST"])
-        self.assertIn("Toronto", " ".join(ca.profile()["business"]["address"]))
+        taxes = {t["code"]: t["applies_to"] for t in ca.profile()["tax"]["taxes"]}
+        self.assertEqual(list(taxes), ["GST", "PST"])  # British Columbia: two taxes
+        self.assertEqual(taxes["PST"], ["material", "equipment"])
+        self.assertIn("Vancouver", " ".join(ca.profile()["business"]["address"]))
+        quote = ca.doc(next(d["id"] for d in ca.docs("quote") if d["status"] == "sent"))
+        rows = {r["code"]: r for r in quote["options"][0]["totals"]["taxes"]}
+        self.assertEqual(set(rows), {"GST", "PST"})
+        self.assertLess(Decimal(rows["PST"]["base"]), Decimal(rows["GST"]["base"]))  # no PST on labour
         au = Store(Path(self.tmp.name) / "demo-au")
         seed(au, "AUD", history=False)
         self.assertEqual(au.profile()["labels"]["invoice"], "Tax Invoice")
+
+    def test_paid_invoice_and_receipt_read_cleanly(self):
+        inv = self._issued()
+        pay = docs.payment_record(self.store, invoice_id=inv["id"], amount="105", method="Cash")["payment"]
+        pdf = Path(render_doc(self.store, self.store.doc(inv["id"]), engine="builtin")["files"]["pdf"]).read_bytes()
+        ops = b"".join(zlib.decompress(m) for m in re.findall(rb"\nstream\n(.*?)\nendstream", pdf, re.S))
+        self.assertIn(b"(PAID) Tj", ops)  # a badge, read back as one word
+        self.assertNotIn(b"Tm (PAID) Tj", ops)  # not a diagonal watermark
+        receipt = Path(render_receipt(self.store, pay["id"], "html", "builtin")["files"]["html"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Received from", receipt)
+        self.assertNotIn(">Qty<", receipt)
+
+    def test_documents_say_who_approved_and_what_was_a_deposit(self):
+        quote = self._fixed_quote([{"kind": "fee", "description": "Work", "unit_price": "1000"}])
+        job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+        co = docs.co_create(
+            self.store,
+            job_id,
+            {"title": "Extra", "lines": [{"kind": "fee", "description": "Extra", "unit_price": "50"}]},
+        )["change_order"]
+        self.assertTrue(co["lines"][0]["id"].startswith("CO"))
+        docs.co_approve(self.store, co["id"], "Jane", "text message", None, date="2026-10-15")
+        html = Path(render_doc(self.store, self.store.doc(co["id"]), fmt="html", engine="builtin")["files"]["html"])
+        self.assertIn("Approved by Jane on 15 Oct 2026 (text message)", html.read_text(encoding="utf-8"))
+        docs.payment_record(self.store, job_id=job_id, amount="200", method="Bank", deposit=True)
+        inv = docs.invoice_create(self.store, job_id=job_id)["invoice"]
+        docs.invoice_issue(self.store, inv["id"])
+        html = Path(render_doc(self.store, self.store.doc(inv["id"]), fmt="html", engine="builtin")["files"]["html"])
+        self.assertIn("Deposit received (15 Oct 2026)", html.read_text(encoding="utf-8"))
+
+    def test_reminders_skip_meaningless_day_counts(self):
+        inv = self._issued()
+        docs.invoice_mark_sent(self.store, inv["id"], "email", "jane@example.com")
+        os.environ["JTP_TODAY"] = "2026-10-27"  # due 29 Oct: the heads-up stage
+        early = next(a for a in followups.due_actions(self.store) if a["action"] == "payment_reminder")
+        self.assertEqual(early["days_until_due"], 2)
+        self.assertNotIn("days_overdue", early)
 
     def test_reminder_ladder(self):
         inv = docs.invoice_create(

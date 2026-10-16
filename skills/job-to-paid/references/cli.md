@@ -283,7 +283,7 @@ Spec format (JSON):
 unit_cost is what the owner pays (markup is added); a bare figure from the owner is a cost.
 Add "estimate": true to a line whose price still needs confirming.
 Add "tax_codes": [] (no tax) or ["GST"] only when the owner says that line is taxed differently.
---dry-run prices it without saving and writes output/PREVIEW.pdf to show the owner.
+--dry-run prices it without saving and writes previews/PREVIEW.pdf to show the owner.
 
 positional arguments:
   {create,revise,show,list,mark-sent,accept,decline,extend,expire,supersede}
@@ -299,8 +299,7 @@ options:
   --to TO               Where it went (email address or phone number)
   --option OPTION       The option the customer chose (A, B, C...)
   --by BY               Who accepted or approved (customer name)
-  --method METHOD       How: email, text message, signed PDF, in person... (payments: e-Transfer, card,
-                        cash...)
+  --method METHOD       How they said yes: email, text message, signed PDF, phone, in person
   --note NOTE           Free text kept on record
   --reason REASON       Why (kept on record)
   --date DATE           YYYY-MM-DD, today, yesterday, or +N / -N days (default: today)
@@ -308,12 +307,12 @@ options:
   --status STATUS       Filter by status
   --tags TAGS           Job-type tags, comma separated (e.g. 'water heater,gas')
   --days DAYS
-  --dry-run             Price it without saving (writes output/PREVIEW.pdf)
+  --dry-run             Price it without saving (writes previews/PREVIEW.pdf)
   --with WITH_QUOTE     The quote that replaced this one (supersede)
   --as-spec             Show as an editable spec
 
 Examples:
-  jtp quote create --customer C-0001 --spec quote.json --dry-run   (totals + output/PREVIEW.pdf)
+  jtp quote create --customer C-0001 --spec quote.json --dry-run   (totals + previews/PREVIEW.pdf)
   jtp quote create --spec quote.json --dry-run   (a sample PDF before any customer exists)
   jtp quote create --job J-0002 --spec quote.json
   jtp quote mark-sent Q-0001 --channel email --to jane@example.com
@@ -345,12 +344,11 @@ options:
   --channel CHANNEL     email, sms, whatsapp, phone, in_person, portal or other
   --to TO               Where it went (email address or phone number)
   --by BY               Who accepted or approved (customer name)
-  --method METHOD       How: email, text message, signed PDF, in person... (payments: e-Transfer, card,
-                        cash...)
+  --method METHOD       How they said yes: email, text message, signed PDF, phone, in person
   --note NOTE           Free text kept on record
   --reason REASON       Why (kept on record)
   --date DATE           YYYY-MM-DD, today, yesterday, or +N / -N days (default: today)
-  --dry-run             Preview it (output/PREVIEW.pdf) without saving
+  --dry-run             Preview it (previews/PREVIEW.pdf) without saving
 
 Examples:
   jtp co create --job J-0001 --spec '{"title":"Add shut-off valve","reason":"Old valve seized","lines":[{"kind":"material","pricebook":"PB-0005","qty":1},{"kind":"labour","description":"Swap valve","qty":0.5}]}'
@@ -404,7 +402,7 @@ options:
   --allow-unconfirmed-tax
   --estimates-confirmed
                         The owner confirmed the lines that were estimates (issue)
-  --dry-run             Preview it (output/PREVIEW.pdf) without saving
+  --dry-run             Preview it (previews/PREVIEW.pdf) without saving
   --as-spec
 
 Examples:
@@ -442,7 +440,7 @@ options:
   --channel CHANNEL     email, sms, whatsapp, phone, in_person, portal or other
   --to TO               Where it went (email address or phone number)
   --date DATE           YYYY-MM-DD, today, yesterday, or +N / -N days (default: today)
-  --dry-run             Preview it (output/PREVIEW.pdf) without saving
+  --dry-run             Preview it (previews/PREVIEW.pdf) without saving
 
 Examples:
   jtp credit create --invoice INV-0003 --amount 50 --reason "Goodwill discount"
@@ -454,10 +452,9 @@ Examples:
 ## payment
 
 ```text
-usage: jtp payment [-h] [--job JOB] [--amount AMOUNT] [--method METHOD] [--date DATE]
-                   [--reference REFERENCE] [--note NOTE] [--from START] [--to END] [--deposit]
-                   [--percent PERCENT] [--allow-duplicate] [--format {pdf,html,both}]
-                   [--engine {auto,builtin,chrome}]
+usage: jtp payment [-h] [--job JOB] [--amount AMOUNT] [--date DATE] [--reference REFERENCE] [--note NOTE]
+                   [--method METHOD] [--from START] [--to END] [--deposit] [--percent PERCENT]
+                   [--allow-duplicate] [--format {pdf,html,both}] [--engine {auto,builtin,chrome}]
                    {record,list,undo,receipt} [ID]
 
 Record payments and deposits, list them, undo mistakes, make receipts.
@@ -470,12 +467,11 @@ options:
   -h, --help            show this help message and exit
   --job JOB             Job id, e.g. J-0001
   --amount AMOUNT       Amount (including tax where it's a payment or credit)
-  --method METHOD       How: email, text message, signed PDF, in person... (payments: e-Transfer, card,
-                        cash...)
   --date DATE           YYYY-MM-DD, today, yesterday, or +N / -N days (default: today)
   --reference REFERENCE
                         Payment reference (e-transfer id, cheque no.)
   --note NOTE           Free text kept on record
+  --method METHOD       How they paid: e-Transfer, card, cash, cheque, bank transfer...
   --from START
   --to END
   --deposit             Money in before invoicing, held on the job (with --job)

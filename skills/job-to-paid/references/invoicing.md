@@ -26,7 +26,7 @@ needs a formal invoice for the deposit itself (some tax systems do).
 
 ## The flow
 
-1. **Preview**: add `--dry-run` and check the lines and total (it also writes `output/PREVIEW.pdf`).
+1. **Preview**: add `--dry-run` and check the lines and total (it also writes `previews/PREVIEW.pdf`).
    The output shows `deposits_held` and `balance_after_deposits`, which is what the customer will
    actually owe. Tell the owner about any `warnings` (unapproved change orders, logged time not
    marked extra, estimates still to confirm).

@@ -26,13 +26,14 @@ def _logo_tag(path: str) -> str:
     return f'<img class="logo" alt="" src="data:{mime};base64,{base64.b64encode(data).decode()}">'
 
 
-def _rows(rows) -> str:
+def _rows(rows, simple=False) -> str:
     out = []
     for row in rows:
         cls = row.get("style", "item")
+        middle = "" if simple else f'<td class="num">{_e(row["qty"])}</td><td class="num">{_e(row["unit_price"])}</td>'
         out.append(
-            f'<tr class="{cls}"><td class="desc">{_e(row["desc"])}</td><td class="num">{_e(row["qty"])}</td>'
-            f'<td class="num">{_e(row["unit_price"])}</td><td class="num">{_e(row["amount"])}</td></tr>'
+            f'<tr class="{cls}"><td class="desc">{_e(row["desc"])}</td>{middle}'
+            f'<td class="num">{_e(row["amount"])}</td></tr>'
         )
     return "\n".join(out)
 
@@ -72,7 +73,11 @@ def render_html(view: dict) -> str:
     parts.append(f'<div class="number">{_e(number)}</div><table class="meta">')
     for label, value in v["meta"]:
         parts.append(f"<tr><td>{_e(label)}</td><td>{_e(value)}</td></tr>")
-    parts.append("</table></div></header>")
+    parts.append("</table>")
+    paid = bool(v.get("stamp")) and v["stamp"].lower() == labels["paid_stamp"].lower()
+    if paid:
+        parts.append(f'<div class="paid-badge">{_e(v["stamp"])}</div>')
+    parts.append("</div></header>")
     parts.append('<section class="parties">')
     for block in (v.get("customer"), v.get("site")):
         if block:
@@ -105,7 +110,11 @@ def render_html(view: dict) -> str:
             parts.append(f"<h2>{_e(section['heading'])}{badge}</h2>")
             if section.get("subheading"):
                 parts.append(f'<p class="muted">{_e(section["subheading"])}</p>')
-        parts.append(f'<table class="lines">{head}<tbody>{_rows(section["rows"])}</tbody></table>')
+        if section.get("simple"):
+            simple_head = f'<thead><tr><th>{_e(labels["description"])}</th><th class="num">{_e(labels["amount"])}</th></tr></thead>'
+            parts.append(f'<table class="lines">{simple_head}<tbody>{_rows(section["rows"], True)}</tbody></table>')
+        else:
+            parts.append(f'<table class="lines">{head}<tbody>{_rows(section["rows"])}</tbody></table>')
         if section.get("totals"):
             parts.append(_totals(section["totals"]))
     parts.append(_totals(v.get("totals") or [], v.get("balance")))
@@ -149,7 +158,12 @@ def render_html(view: dict) -> str:
             if lower == labels["void_stamp"].lower()
             else "draft"
         )
-    stamp = f'<div class="stamp {stamp_kind}">{_e(v["stamp"])}</div>' if v.get("stamp") else ""
+    # Watermarks are decoration: hidden from screen readers and copy/paste. "Paid" is a badge instead.
+    stamp = (
+        f'<div class="stamp {stamp_kind}" aria-hidden="true">{_e(v["stamp"])}</div>'
+        if v.get("stamp") and stamp_kind != "paid"
+        else ""
+    )
     title = f"{v['title']} {v['number']}"
     return f"""<!doctype html>
 <html lang="{_e(v.get("language", "en"))}"><head><meta charset="utf-8">
@@ -209,7 +223,9 @@ table.totals tr.balance td {{ background: color-mix(in srgb, var(--brand) 14%, w
 footer {{ border-top: 1px solid var(--rule); margin-top: 22px; padding-top: 8px; font-size: 11px; color: var(--muted); }}
 .stamp {{ position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%) rotate(-28deg); font-size: 120px;
           font-weight: 900; color: rgba(90, 96, 110, .12); pointer-events: none; z-index: 0; }}
-.stamp.paid {{ color: rgba(16, 140, 70, .16); }} .stamp.void {{ color: rgba(190, 40, 40, .14); }}
+.stamp.void {{ color: rgba(190, 40, 40, .14); }} .stamp {{ user-select: none; }}
+.paid-badge {{ display: inline-block; margin-top: 8px; padding: 2px 12px; border: 1.5px solid #108040;
+               border-radius: 5px; color: #0b6b34; background: #e3f5e8; font-weight: 800; letter-spacing: 1px; }}
 @media print {{ body {{ max-width: none; padding: 0; }} .bar {{ margin: 0 0 22px; }} }}
 </style></head>
 <body>{stamp}

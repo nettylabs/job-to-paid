@@ -18,8 +18,9 @@ First release.
 - Money brief, receivables aging, job profit, pricing insight (real vs quoted hours), tax charged (accrual or cash
   basis), sales, CSV exports with credit notes included.
 - A copy of every quote, change order, invoice and credit note exactly as it was sent.
+- Paid documents carry a clean "PAID" badge that copies and reads as one word; receipts show who paid.
 - Any currency (0, 2 or 3 decimals), with the currency code beside totals where a symbol like $ is shared, any
   taxes (exclusive, inclusive or compound), any date format, letter or A4, and translatable document wording. Payment instructions can name the quote or invoice number.
 - Built-in PDF engine with no dependencies, plus HTML output and an optional local browser engine for any language.
-- Standard library Python 3.9+, local files only, no network calls, 44 automated tests and a built-in self-test. The demo business looks local
-  in USD, CAD (HST), GBP (VAT) and AUD (GST).
+- Standard library Python 3.9+, local files only, no network calls, 47 automated tests and a built-in self-test. The demo business looks local
+  in USD, CAD (BC GST + PST), GBP (VAT) and AUD (GST).

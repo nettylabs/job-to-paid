@@ -45,7 +45,8 @@ like 15 Oct 2026. Look right?")
 - Paper size (`locale.paper_size`): `letter` (US, Canada, Mexico, Philippines) or `a4` (most others).
 - Time zone (`locale.timezone`, e.g. `America/Vancouver`, `Europe/London`) so "today" and due dates are right.
 - Language for documents (`locale.language`). If it isn't English, run `jtp profile labels`, translate
-  **every** value, and save them with `jtp profile set labels '<json>'`. Also translate line
+  **every** value (keep `{name}`, `{date}` and `{number}` exactly as they are), and save them with
+  `jtp profile set labels '<json>'`. Also translate line
   descriptions you write. Labels are also how to match local paperwork rules, e.g. `"invoice": "Tax Invoice"`
   and `"credit_note": "Adjustment Note"` (Australia), or `"total_incl_tax": "Total (incl. GST)"`.
 - The built-in PDF fonts cover English and most Western European languages. For other scripts
@@ -125,7 +126,7 @@ jtp numbering quote 300
 Prefixes can change too: `jtp profile set numbering.invoice_prefix "2026-"`.
 
 Finish with `jtp profile check`. Then show the owner what customers will see: a preview works
-before any customer exists and writes `output/PREVIEW.pdf` (stamped DRAFT, nothing saved):
+before any customer exists and writes `previews/PREVIEW.pdf` (stamped DRAFT, nothing saved):
 
 ```bash
 jtp quote create --dry-run --spec '{"title":"Sample job","lines":[{"kind":"labour","description":"Install","qty":3},{"kind":"material","description":"Parts","qty":1,"unit_cost":200}]}'

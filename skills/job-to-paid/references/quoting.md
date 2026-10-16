@@ -110,7 +110,7 @@ only when the owner asks for something different on this job.
 jtp quote create --customer C-0001 --tags "water heater" --spec quote.json --dry-run
 ```
 
-Nothing is saved, but the preview also writes `output/PREVIEW.pdf` (stamped DRAFT), so the owner
+Nothing is saved, but the preview also writes `previews/PREVIEW.pdf` (stamped DRAFT), so the owner
 can see exactly what the customer will get. It works before the customer is added, too (leave out
 `--customer`). Show the owner each option's total, the deposit, how you read any bare prices (cost
 or sell), and any warnings (estimates especially). Then:

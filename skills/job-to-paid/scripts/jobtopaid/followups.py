@@ -197,6 +197,7 @@ def due_actions(store, day: _dt.date | None = None) -> list:
         if any(s >= stage for s in done if isinstance(s, int)):
             continue
         stage_day = invoice_days[stage - 1]
+        timing = {"days_overdue": rel} if rel > 0 else ({"days_until_due": -rel} if rel < 0 else {})
         actions.append(
             {
                 "action": "payment_reminder",
@@ -204,8 +205,6 @@ def due_actions(store, day: _dt.date | None = None) -> list:
                 "stage": stage,
                 "of": len(invoice_days),
                 "tone": _invoice_tone(stage_day, stage == len(invoice_days)),
-                "days_overdue": max(rel, 0),
-                "days_until_due": max(-rel, 0),
                 "due_date": doc["due_date"],
                 "customer": card,
                 "title": doc["title"],
@@ -213,6 +212,7 @@ def due_actions(store, day: _dt.date | None = None) -> list:
                 "balance": format_money(state["balance"], disp),
                 "payment_link": doc.get("payment_link") or None,
                 "pdf": _pdf(store, doc["id"]),
+                **timing,
             }
         )
 

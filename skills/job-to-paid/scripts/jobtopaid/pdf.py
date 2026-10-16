@@ -971,6 +971,16 @@ class Layout:
             right_y += 13
             self.c.text(self.right, right_y, str(value), "F2", 9, INK, "right")
             self.c.text(self.right - 104, right_y, f"{label}", "F1", 9, MUTED, "right")
+        if self._paid_stamp():
+            text = v["stamp"].upper()
+            width = text_width(text, "F2", 11) + 20
+            right_y += 10
+            green = (0.06, 0.5, 0.25)
+            self.c.rect(
+                self.right - width, right_y, width, 19, fill=(0.89, 0.96, 0.91), stroke=green, line_width=1.2, radius=4
+            )
+            self.c.text(self.right - width / 2, right_y + 13.6, text, "F2", 11, green, "center")
+            right_y += 19
         self.y = max(left_y, right_y) + 16
         self.c.line(self.margin, self.y, self.right, self.y, RULE, 0.8)
         self.y += 18
@@ -1040,8 +1050,9 @@ class Layout:
         labels = self.view["labels"]
         top = self.y + 12
         self.c.text(cols["desc"] + 6, top, labels["description"].upper(), "F2", 7.6, MUTED)
-        self.c.text(cols["qty_r"], top, labels["qty"].upper(), "F2", 7.6, MUTED, "right")
-        self.c.text(cols["price_r"], top, labels["unit_price"].upper(), "F2", 7.6, MUTED, "right")
+        if not cols.get("simple"):
+            self.c.text(cols["qty_r"], top, labels["qty"].upper(), "F2", 7.6, MUTED, "right")
+            self.c.text(cols["price_r"], top, labels["unit_price"].upper(), "F2", 7.6, MUTED, "right")
         self.c.text(cols["amount_r"], top, labels["amount"].upper(), "F2", 7.6, MUTED, "right")
         self.y += 22
 
@@ -1062,12 +1073,14 @@ class Layout:
 
     def section(self, section):
         amount_w, price_w, qty_w = 84.0, 84.0, 58.0
+        simple = bool(section.get("simple"))
         self.cols = {
             "desc": self.margin,
-            "desc_w": self.content_width - amount_w - price_w - qty_w - 12,
+            "desc_w": self.content_width - amount_w - 12 - (0 if simple else price_w + qty_w),
             "qty_r": self.right - amount_w - price_w - 6,
             "price_r": self.right - amount_w - 4,
             "amount_r": self.right - 6,
+            "simple": simple,
         }
         # Keep a section (an option, a change order) on one page when it can fit on one.
         height = self._section_height(section)
@@ -1187,7 +1200,11 @@ class Layout:
     def small_block(self, heading, text):
         if not text:
             return
-        self.need(30)
+        height = 22 + 11 * len(wrap(text, "F1", 8.4, self.content_width))
+        if self.y + height > self.bottom and height <= self.bottom - 62:
+            self.new_page()  # keep fine print together instead of leaving a line on a page of its own
+        else:
+            self.need(30)
         self.y += 4
         self.c.text(self.margin, self.y + 9, heading.upper(), "F2", 7.6, MUTED)
         self.y += 10
@@ -1208,9 +1225,13 @@ class Layout:
                 self.c.text(self.margin, top + i * 9.5, part, "F1", 7.8, MUTED)
             self.c.text(self.right, top, f"{labels['page']} {n} {labels['of']} {total}", "F1", 7.8, MUTED, "right")
 
+    def _paid_stamp(self) -> bool:
+        text = self.view.get("stamp") or ""
+        return bool(text) and text.lower() == self.view["labels"]["paid_stamp"].lower()
+
     def stamp(self):
         text = self.view.get("stamp")
-        if not text:
+        if not text or self._paid_stamp():  # paid shows as a badge in the header
             return
         self.c.page = self.pdf.pages[0]
         palette = {"paid": (0.80, 0.93, 0.85), "void": (0.96, 0.85, 0.85)}

@@ -104,7 +104,7 @@ Message wording for every situation is in [references/messages.md](references/me
    quoting.md and ask about the 1 to 3 items that probably apply. Offer good/better/best when
    there's a natural choice (equipment grade, scope, warranty).
 3. **Preview.** `jtp quote create --customer C-0001 --spec quote.json --dry-run` (nothing saved;
-   it writes `output/PREVIEW.pdf`), then show the owner each option's total, the deposit, how you
+   it writes `previews/PREVIEW.pdf`), then show the owner each option's total, the deposit, how you
    read any bare prices (cost or sell), and anything flagged as an estimate.
 4. **Create.** Run it without `--dry-run`. The PDF is made automatically. Offer to save new
    materials to the price book (the output lists `pricebook_suggestions`).

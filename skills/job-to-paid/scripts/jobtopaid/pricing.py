@@ -190,8 +190,9 @@ def normalize_lines(profile: dict, pricebook: list, specs, places: int, prefix: 
         elif "unit_price" in spec:
             unit_price = to_decimal(spec["unit_price"], f"line {index} unit_price")
             _check_places(unit_price, places + 2, f"Line {index} unit_price")
-            if spec.get("cost_before_tax") not in (None, ""):
-                unit_cost = to_decimal(spec["cost_before_tax"], f"line {index} cost_before_tax")
+            stored_cost = spec.get("unit_cost_before_tax", spec.get("cost_before_tax"))
+            if stored_cost not in (None, ""):
+                unit_cost = to_decimal(stored_cost, f"line {index} unit_cost_before_tax")
             elif "unit_cost" in spec:
                 entered_cost = to_decimal(spec["unit_cost"], f"line {index} unit_cost")
             elif item and item.get("cost") not in (None, ""):
@@ -262,7 +263,7 @@ def normalize_lines(profile: dict, pricebook: list, specs, places: int, prefix: 
 def lines_as_spec(lines: list) -> list:
     """Turn stored lines back into editable specs with explicit prices.
 
-    Stored costs are already before tax, so they're carried as `cost_before_tax`
+    Stored costs are already before tax, so they're carried as `unit_cost_before_tax`
     and never converted a second time.
     """
     specs = []
@@ -286,7 +287,7 @@ def lines_as_spec(lines: list) -> list:
                 "tax_codes": ln.get("tax_codes", []),
             }
             if ln.get("unit_cost") not in (None, ""):
-                spec["cost_before_tax"] = ln["unit_cost"]
+                spec["unit_cost_before_tax"] = ln["unit_cost"]
             if ln.get("rate_key"):
                 spec["rate_key"] = ln["rate_key"]
             if ln.get("estimate"):

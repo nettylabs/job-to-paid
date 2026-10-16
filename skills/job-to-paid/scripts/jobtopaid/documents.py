@@ -483,7 +483,7 @@ def co_create(store, job_id: str, spec: dict, dry_run=False) -> dict:
             "A change order needs lines.",
             hint='{"title":"Add shut-off valve","reason":"Old valve seized","lines":[...]}',
         )
-    lines, totals, warnings, suggestions = build_lines(store, spec["lines"], prefix="C")
+    lines, totals, warnings, suggestions = build_lines(store, spec["lines"], prefix="CO")
     doc = {
         "id": PREVIEW_ID if dry_run else store.next_id("change_order"),
         "type": "change_order",
@@ -515,7 +515,7 @@ def co_update(store, ident: str, spec: dict) -> dict:
     if doc["status"] not in ("draft", "sent"):
         raise JTPError(f"{doc['id']} is {doc['status']} and can't be changed.", hint="Create a new change order.")
     if spec.get("lines"):
-        doc["lines"], doc["totals"], warnings, suggestions = build_lines(store, spec["lines"], prefix="C")
+        doc["lines"], doc["totals"], warnings, suggestions = build_lines(store, spec["lines"], prefix="CO")
     else:
         warnings, suggestions = [], []
     for key in ("title", "reason", "notes"):
