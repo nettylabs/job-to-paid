@@ -29,6 +29,19 @@ def _plural(count: int, word: str) -> str:
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
+ACTION_WORDS = {
+    "payment_reminder": "payment reminder",
+    "escalate": "escalation",
+    "send_invoice": "unsent invoice",
+    "change_order_followup": "change order follow-up",
+    "quote_followup": "quote follow-up",
+    "quote_expired": "expired quote",
+    "send_quote": "unsent quote",
+    "service_reminder": "service reminder",
+    "review_request": "review request",
+}
+
+
 def _fmt(store, value) -> str:
     return format_money(to_decimal(value), store.money())
 
@@ -411,7 +424,7 @@ def brief(store, day=None) -> dict:
         )
     lines.append(f"Paid this week: {disp_fmt(paid_week)}; this month: {disp_fmt(paid_month)}")
     if actions:
-        parts = ", ".join(_plural(n, name.replace("_", " ")) for name, n in counts.items())
+        parts = ", ".join(_plural(n, ACTION_WORDS.get(name, name.replace("_", " "))) for name, n in counts.items())
         lines.append(f"Ready for your OK today: {parts}")
     else:
         lines.append("Nothing to chase today.")

@@ -116,7 +116,7 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
     bakery = records.customer_add(
         store,
         {
-            "name": "Bob's Bakery",
+            "name": "Bob Martin",
             "company": "Bob's Bakery Ltd",
             "email": "bob@bakery.example",
             "phone": "+1 555 0177",
