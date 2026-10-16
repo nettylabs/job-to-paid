@@ -43,6 +43,9 @@ payment methods, ready to paste) plus `payment_link` when one is set:
 | `review_request` | Paid job, review link set | The review request |
 | `service_reminder` | Recurring service coming due | The service reminder |
 
+If an action has a `heads_up`, the customer has since accepted a different quote. Ask the owner
+before drafting anything; if the old quote was replaced, retire it with the command in the heads-up.
+
 **The approval loop** (the morning routine does exactly this):
 
 1. Draft every message, in the customer's language and the owner's voice, on the customer's

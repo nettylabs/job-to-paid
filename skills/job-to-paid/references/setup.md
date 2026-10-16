@@ -99,10 +99,12 @@ jtp pricebook import items.csv     # columns: name,kind,unit,cost,price,markup_p
   below that total then show no deposit.
 - Quote terms, invoice terms and warranty text (one or two plain sentences each).
 - How customers pay: every method with exact instructions (bank details, e-transfer address,
-  cheque payee, card link wording).
+  cheque payee, how to pay by card). Write `{number}` where the customer should quote a reference: it
+  becomes the quote or invoice number on each document ("Use {number} as the reference"). Only mention a
+  "Pay online" button if the owner will add payment links to invoices.
 
 ```bash
-jtp profile set payment.methods '[{"name":"Interac e-Transfer","instructions":"Send to pay@acme.example (auto-deposit)"},{"name":"Card","instructions":"Use the Pay online button on your invoice"}]'
+jtp profile set payment.methods '[{"name":"Interac e-Transfer","instructions":"Send to pay@acme.example (auto-deposit) with {number} in the message"},{"name":"Card","instructions":"Call 604 555 0100 to pay by card"}]'
 jtp profile set terms.warranty "12-month workmanship warranty. Manufacturer warranties apply to equipment."
 ```
 

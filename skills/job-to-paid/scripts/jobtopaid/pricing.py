@@ -29,7 +29,7 @@ MARKUP_KEYS = {
     "equipment": "equipment_markup_pct",
     "subcontract": "subcontract_markup_pct",
 }
-PASSTHROUGH = ("source", "section", "display_qty", "note", "internal_note")
+PASSTHROUGH = ("source", "section", "display_qty", "note", "internal_note", "tax_fixed")
 
 
 def find_pricebook_item(items: list, ref) -> dict | None:
@@ -238,7 +238,10 @@ def normalize_lines(profile: dict, pricebook: list, specs, places: int, prefix: 
 
         if spec.get("estimate"):
             line["estimate"] = True
-            warnings.append(f"Line {index} ({description}): price is marked as an estimate. Confirm it before sending.")
+            warnings.append(
+                f"Line {index} ({description}): marked as an estimate. Confirm the real figure with the owner "
+                "before this goes to the customer."
+            )
         if kind in ("material", "equipment") and not item and entered_cost is not None:
             suggestions.append(
                 {
@@ -286,6 +289,8 @@ def lines_as_spec(lines: list) -> list:
                 spec["cost_before_tax"] = ln["unit_cost"]
             if ln.get("rate_key"):
                 spec["rate_key"] = ln["rate_key"]
+            if ln.get("estimate"):
+                spec["estimate"] = True  # stays an estimate until the owner confirms the real figure
         for key in PASSTHROUGH:
             if key in ln:
                 spec[key] = ln[key]

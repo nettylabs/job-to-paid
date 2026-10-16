@@ -242,48 +242,29 @@ def compute_totals(lines: list, tax_cfg: dict, places: int) -> dict:
         ln["discount"] = str(d)
         ln["net"] = str(n)
 
+    # Tax is worked out and rounded line by line, so documents add up: an invoice for an
+    # accepted quote plus its change orders comes to exactly what the customer agreed to.
+    bases = {t["code"]: ZERO for t in taxes}
+    tax_by_code = {t["code"]: ZERO for t in taxes}
+    used = set()
+    for ln, net in zip(priced, nets):
+        line_tax, line_bases, net_excl = line_tax_breakdown(ln, net, taxes, inclusive, places)
+        ln["tax_amounts"] = {code: str(value) for code, value in line_tax.items()}
+        ln["net_excl_tax"] = str(net_excl)
+        for code, value in line_tax.items():
+            tax_by_code[code] += value
+            bases[code] += line_bases[code]
+            used.add(code)
     tax_rows = []
+    for t in taxes:
+        code = t["code"]
+        if code in used and not (bases[code] == 0 and tax_by_code[code] == 0):
+            tax_rows.append(_tax_row(t, q(bases[code], places), tax_by_code[code]))
+    tax_total = sum(tax_by_code.values(), ZERO)
     if inclusive:
-        unrounded = {t["code"]: ZERO for t in taxes}
-        bases = {t["code"]: ZERO for t in taxes}
-        for ln, gross in zip(priced, nets):
-            codes = ln.get("tax_codes") or []
-            rate_sum = sum((to_decimal(t["rate"]) / HUNDRED for t in taxes if t["code"] in codes), ZERO)
-            net_excl = gross / (1 + rate_sum) if rate_sum else gross
-            ln["net_excl_tax"] = str(q(net_excl, places))
-            for t in taxes:
-                if t["code"] in codes:
-                    bases[t["code"]] += net_excl
-                    unrounded[t["code"]] += net_excl * to_decimal(t["rate"]) / HUNDRED
-        for t in taxes:
-            amount = q(unrounded[t["code"]], places)
-            if bases[t["code"]] == 0 and amount == 0:
-                continue
-            tax_rows.append(_tax_row(t, q(bases[t["code"]], places), amount))
         total = sum(nets, ZERO)
-        tax_total = sum((to_decimal(r["amount"]) for r in tax_rows), ZERO)
         net_excl_tax = total - tax_total
     else:
-        for ln in priced:
-            ln["net_excl_tax"] = ln["net"]
-        prior = [ZERO for _ in priced]
-        for t in taxes:
-            rate = to_decimal(t["rate"]) / HUNDRED
-            base_sum = ZERO
-            tax_sum = ZERO
-            for i, (ln, net) in enumerate(zip(priced, nets)):
-                if t["code"] not in (ln.get("tax_codes") or []):
-                    continue
-                base = net + (prior[i] if t.get("compound") else ZERO)
-                line_tax = base * rate
-                base_sum += base
-                tax_sum += line_tax
-                prior[i] += line_tax
-            amount = q(tax_sum, places)
-            if base_sum == 0 and amount == 0:
-                continue
-            tax_rows.append(_tax_row(t, q(base_sum, places), amount))
-        tax_total = sum((to_decimal(r["amount"]) for r in tax_rows), ZERO)
         net_excl_tax = sum(nets, ZERO)
         total = net_excl_tax + tax_total
 
@@ -316,6 +297,39 @@ def compute_totals(lines: list, tax_cfg: dict, places: int) -> dict:
 
 
 NON_HOUR_UNITS = ("day", "days", "d", "job", "ea", "each", "flat", "visit", "lot", "ls", "lump sum")
+
+
+def line_tax_breakdown(ln: dict, net: Decimal, taxes: list, inclusive: bool, places: int) -> tuple:
+    """Taxes for one priced line, each rounded to the minor unit: ({code: tax}, {code: base}, net before tax).
+
+    A line can carry `tax_fixed` ({"net": ..., "taxes": {code: amount}}): the tax left to bill on a
+    quote line after progress invoices, so all the invoices together match the quote to the cent.
+    It only applies while the line's net is unchanged; edit the line and its tax is worked out again.
+    """
+    codes = ln.get("tax_codes") or []
+    applied = [t for t in taxes if t["code"] in codes]
+    fixed = ln.get("tax_fixed") or {}
+    use_fixed = fixed.get("net") not in (None, "") and to_decimal(fixed["net"]) == net
+    fixed_taxes = (fixed.get("taxes") or {}) if use_fixed else {}
+
+    def rounded(code, exact):
+        return q(to_decimal(fixed_taxes[code]), places) if code in fixed_taxes else q(exact, places)
+
+    out, bases = {}, {}
+    if inclusive:
+        rate_sum = sum((to_decimal(t["rate"]) / HUNDRED for t in applied), ZERO)
+        before_tax = net / (1 + rate_sum) if rate_sum else net
+        for t in applied:
+            out[t["code"]] = rounded(t["code"], before_tax * to_decimal(t["rate"]) / HUNDRED)
+        net_excl = net - sum(out.values(), ZERO)
+        return out, {code: net_excl for code in out}, net_excl
+    prior = ZERO
+    for t in applied:
+        base = net + (prior if t.get("compound") else ZERO)
+        out[t["code"]] = rounded(t["code"], base * to_decimal(t["rate"]) / HUNDRED)
+        bases[t["code"]] = base
+        prior += out[t["code"]]
+    return out, bases, net
 
 
 def _tax_row(tax: dict, base: Decimal, amount: Decimal) -> dict:

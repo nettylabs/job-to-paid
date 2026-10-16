@@ -53,7 +53,8 @@ It never decides your taxes for you and isn't tax or legal advice. It applies ex
 
 - **You approve every message.** Nothing goes to a customer until you say so. It never charges cards or moves money.
 - **Exact math.** Every total, tax, discount, deposit and balance comes from a tested calculator (Python
-  `Decimal`, correct rounding per currency), never from the AI's head.
+  `Decimal`, correct rounding per currency), never from the AI's head. Tax is worked out line by line, so the
+  invoice always matches the quote plus approved changes, to the cent.
 - **Your margins stay private.** Costs, markups and internal notes never appear on customer documents.
 - **No network, no credentials, no telemetry.** See [SECURITY.md](SECURITY.md).
 - **Audit trail.** Every change is logged, a copy of each document is kept exactly as it was sent, and one command

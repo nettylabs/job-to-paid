@@ -11,9 +11,13 @@
 | Quick one-off (service call) | `jtp invoice create --customer C-0003 --title "Service call: no hot water" --spec '[...]'` |
 | Add something extra to any of the above | add `--spec '[{"kind":"fee","description":"Return visit","unit_price":89}]'` |
 
-**Rounding:** tax is worked out on each invoice as a whole, so a final invoice can be a cent away from
-adding up the quote and change order totals yourself. That's normal rounding, not a mistake: explain it
-if the owner asks, and never adjust it.
+**Adding up:** tax is worked out line by line, so an invoice for an accepted quote plus approved change
+orders comes to exactly what the customer agreed to, and the last progress invoice bills exactly what's
+left, tax included. Never adjust totals by hand.
+
+**Estimates:** lines that were estimates on the quote stay marked "(estimate)" on the draft, and
+`invoice issue` refuses until the owner confirms them. Ask for the real figure; if it changed, fix the
+line with `invoice update`; then issue with `--estimates-confirmed`.
 
 **Deposits, the simple way:** if the customer pays a deposit, record it on the job
 (`jtp payment record --job J-0004 --deposit --amount 500 ...`). It comes off the next invoice
@@ -25,7 +29,7 @@ needs a formal invoice for the deposit itself (some tax systems do).
 1. **Preview**: add `--dry-run` and check the lines and total (it also writes `output/PREVIEW.pdf`).
    The output shows `deposits_held` and `balance_after_deposits`, which is what the customer will
    actually owe. Tell the owner about any `warnings` (unapproved change orders, logged time not
-   marked extra, estimates).
+   marked extra, estimates still to confirm).
 2. **Create**: the same command without `--dry-run` makes a **draft** (its PDF says DRAFT).
 3. **Owner check**: show the owner the total, the balance after deposits, and anything you decided
    (e.g. "I billed the flex connector as an extra"). Issuing locks the invoice, and after that,

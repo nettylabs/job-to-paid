@@ -15,12 +15,13 @@ from collections import OrderedDict, defaultdict
 from decimal import Decimal
 
 from . import profile as profile_mod
-from .money import HUNDRED, PRICED_KINDS, ZERO, allocate, compute_totals, format_qty, q
+from .money import HUNDRED, PRICED_KINDS, ZERO, allocate, compute_totals, format_qty, line_tax_breakdown, q
 from .pricing import lines_as_spec, normalize_lines
 from .records import job_create
 from .util import JTPError, dec_str, from_iso, iso, now_stamp, parse_date, to_decimal, trim_decimal
 
-QUOTE_STATUSES = ("draft", "sent", "accepted", "declined", "expired", "void")
+QUOTE_STATUSES = ("draft", "sent", "accepted", "declined", "expired", "superseded", "void")
+OPEN_QUOTE = ("draft", "sent", "expired")
 CO_STATUSES = ("draft", "sent", "approved", "declined", "void")
 INVOICE_STATUSES = ("draft", "issued", "paid", "void")
 CHANNELS = ("email", "sms", "whatsapp", "phone", "in_person", "portal", "other")
@@ -218,6 +219,17 @@ def quote_create(store, spec: dict, job_id=None, customer_id=None, dry_run=False
         store, job_id, customer_id, spec.get("title"), spec.get("site_address"), dry_run, spec.get("tags")
     )
     content, warnings, suggestions = _quote_content(store, spec, job["title"])
+    if new_job or (dry_run and not job_id and customer_id):
+        others = [
+            d for d in store.docs("quote") if d["customer_id"] == job["customer_id"] and d["status"] in OPEN_QUOTE
+        ]
+        if others:
+            listed = ", ".join(f"{d['id']} ({d['title']}, job {d['job_id']})" for d in others)
+            warnings.append(
+                f"This customer already has open quotes: {listed}. If this one replaces one of them, create it "
+                "with --job <that job> instead (the old one is retired when this one is accepted), or revise "
+                "the old quote, so the customer doesn't get follow-ups for both."
+            )
     doc = {
         "id": PREVIEW_ID if dry_run else store.next_id("quote"),
         "type": "quote",
@@ -247,7 +259,7 @@ def quote_create(store, spec: dict, job_id=None, customer_id=None, dry_run=False
 
 def quote_revise(store, ident: str, spec: dict) -> dict:
     doc = store.doc(ident, "quote")
-    if doc["status"] in ("accepted", "declined", "void"):
+    if doc["status"] in ("accepted", "declined", "void", "superseded"):
         raise JTPError(
             f"{doc['id']} is {doc['status']} and can't be changed.",
             hint="For extra work on an accepted job use a change order: jtp co create --job "
@@ -298,8 +310,18 @@ def _record_send(doc: dict, channel: str, to: str | None, day: _dt.date) -> bool
     return True
 
 
+def _replaced_error(doc: dict) -> JTPError:
+    by = (doc.get("superseded") or {}).get("by")
+    return JTPError(
+        f"{doc['id']} was replaced" + (f" by {by}, which the customer accepted." if by else "."),
+        hint=f"Work with {by} instead." if by else "Create a new quote instead.",
+    )
+
+
 def quote_mark_sent(store, ident: str, channel: str | None, to: str | None, date=None) -> dict:
     doc = store.doc(ident, "quote")
+    if doc["status"] == "superseded":
+        raise _replaced_error(doc)
     if doc["status"] in ("accepted", "declined", "void"):
         raise JTPError(f"{doc['id']} is already {doc['status']}.")
     if doc["status"] == "expired":
@@ -339,8 +361,18 @@ def quote_accept(
             f"{doc['id']} was already accepted with option {doc['accepted']['option']}.",
             hint="If the customer changed their mind, use a change order for the difference.",
         )
+    if doc["status"] == "superseded":
+        raise _replaced_error(doc)
     if doc["status"] in ("declined", "void"):
         raise JTPError(f"{doc['id']} is {doc['status']}.", hint="Create a new quote instead.")
+    job = store.job(doc["job_id"])
+    earlier = job.get("accepted_quote")
+    if earlier and earlier != doc["id"] and store.doc(earlier, "quote")["status"] == "accepted":
+        raise JTPError(
+            f"{job['id']} already has an accepted quote ({earlier}), and a job bills one quote.",
+            hint=f"Price extra or changed work as a change order: jtp co create --job {job['id']} --spec ... "
+            "If this quote is for separate work, it needs its own job.",
+        )
     warnings = []
     day = parse_date(date or "today", store.today())
     if doc["valid_until"] and day > from_iso(doc["valid_until"]):
@@ -353,7 +385,13 @@ def quote_accept(
     doc["status"] = "accepted"
     doc["accepted"] = {"option": option, "by": by or "", "method": method or "", "note": note or "", "date": iso(day)}
     store.save_doc(doc)
-    job = store.job(doc["job_id"])
+    # Other open quotes on this job were alternatives; stop them getting follow-ups.
+    replaced = []
+    for other_id in job.get("quotes", []):
+        other = store.doc(other_id, "quote") if other_id != doc["id"] else None
+        if other and other["status"] in OPEN_QUOTE:
+            _supersede(store, other, doc["id"], day)
+            replaced.append(other["id"])
     job["pricing"] = "fixed"
     job["accepted_quote"] = doc["id"]
     job["accepted_option"] = option
@@ -367,13 +405,33 @@ def quote_accept(
         "job": job["id"],
         "accepted_total": chosen["totals"]["total"],
         "deposit_due": chosen.get("deposit_due"),
+        "replaced_quotes": replaced,
         "warnings": warnings,
     }
 
 
+def _supersede(store, doc: dict, by: str | None, day: _dt.date) -> None:
+    doc["status"] = "superseded"
+    doc["superseded"] = {"by": by or "", "date": iso(day)}
+    store.save_doc(doc)
+    store.log("quote.superseded", doc["id"], by=by)
+
+
+def quote_supersede(store, ident: str, by: str | None = None, date=None) -> dict:
+    """Mark an open quote as replaced by another one (no more follow-ups, not counted as lost)."""
+    doc = store.doc(ident, "quote")
+    if doc["status"] not in OPEN_QUOTE:
+        raise JTPError(f"{doc['id']} is {doc['status']}; only open quotes can be marked as replaced.")
+    by_id = store.doc(by, "quote")["id"] if by else None
+    if by_id == doc["id"]:
+        raise JTPError("A quote can't replace itself.")
+    _supersede(store, doc, by_id, parse_date(date or "today", store.today()))
+    return {"quote": doc}
+
+
 def quote_decline(store, ident: str, reason: str | None, date=None) -> dict:
     doc = store.doc(ident, "quote")
-    if doc["status"] in ("accepted", "void"):
+    if doc["status"] in ("accepted", "void", "superseded"):
         raise JTPError(f"{doc['id']} is {doc['status']}.")
     doc["status"] = "declined"
     doc["declined"] = {"reason": reason or "", "date": iso(parse_date(date or "today", store.today()))}
@@ -599,8 +657,27 @@ def log_entry_specs(store, job: dict, entries: list, section: str | None) -> tup
     return specs, notes
 
 
+def _line_taxes(store, ln: dict) -> dict:
+    """The tax on one stored line, by code (worked out again for lines saved before per-line tax)."""
+    if ln.get("tax_amounts") is not None:
+        return {code: to_decimal(value) for code, value in ln["tax_amounts"].items()}
+    cfg = store.profile()["tax"]
+    net = to_decimal(ln.get("net", ln["amount"]))
+    return line_tax_breakdown(ln, net, cfg.get("taxes") or [], bool(cfg.get("prices_include_tax")), store.places)[0]
+
+
+def _tax_left(store, ln: dict, remaining: Decimal, billed_tax: dict) -> dict:
+    """Pin the tax on a quote line's last instalment, so all its invoices add up to the quote exactly."""
+    already = billed_tax.get(ln["id"]) or {}
+    return {
+        "net": dec_str(remaining),
+        "taxes": {code: dec_str(value - already.get(code, ZERO)) for code, value in _line_taxes(store, ln).items()},
+    }
+
+
 def _quote_billing(store, job: dict, quote_id: str, exclude: str | None = None) -> tuple:
     billed = defaultdict(lambda: ZERO)
+    billed_tax = defaultdict(lambda: defaultdict(lambda: ZERO))
     progress = ZERO
     final_exists = False
     for inv_id in job.get("invoices", []):
@@ -618,7 +695,9 @@ def _quote_billing(store, job: dict, quote_id: str, exclude: str | None = None) 
             ref = (ln.get("source") or {}).get("quote_line")
             if ref:
                 billed[ref] += to_decimal(ln.get("net", ln["amount"]))
-    return billed, progress, final_exists
+                for code, value in _line_taxes(store, ln).items():
+                    billed_tax[ref][code] += value
+    return billed, billed_tax, progress, final_exists
 
 
 def invoice_create(
@@ -678,7 +757,7 @@ def invoice_create(
                 hint=f"jtp quote accept {quote['id']} --option <key>",
             )
         option = next(o for o in quote["options"] if o["key"] == quote["accepted"]["option"])
-        billed, billed_pct, final_exists = _quote_billing(store, job, quote["id"])
+        billed, billed_tax, billed_pct, final_exists = _quote_billing(store, job, quote["id"])
         source.update({"quote": quote["id"], "option": option["key"]})
         if final_exists:
             raise JTPError(
@@ -702,20 +781,21 @@ def invoice_create(
                 amount = net - billed[ln["id"]] if last else q(net * pct / HUNDRED, store.places)
                 if amount == 0:
                     continue
-                specs.append(
-                    {
-                        "kind": ln["kind"],
-                        "description": f"{ln['description']} ({trim_decimal(pct)}% {word})"
-                        if not deposit_invoice
-                        else f"{word}: {ln['description']} ({trim_decimal(pct)}%)",
-                        "qty": "1",
-                        "unit": "",
-                        "unit_price": dec_str(amount),
-                        "tax_codes": ln.get("tax_codes", []),
-                        "display_qty": False,
-                        "source": {"quote_line": ln["id"]},
-                    }
-                )
+                line_spec = {
+                    "kind": ln["kind"],
+                    "description": f"{ln['description']} ({trim_decimal(pct)}% {word})"
+                    if not deposit_invoice
+                    else f"{word}: {ln['description']} ({trim_decimal(pct)}%)",
+                    "qty": "1",
+                    "unit": "",
+                    "unit_price": dec_str(amount),
+                    "tax_codes": ln.get("tax_codes", []),
+                    "display_qty": False,
+                    "source": {"quote_line": ln["id"]},
+                }
+                if last:
+                    line_spec["tax_fixed"] = _tax_left(store, ln, amount, billed_tax)
+                specs.append(line_spec)
         else:
             kind = "final"
             if billed_pct == 0 and not billed:
@@ -742,6 +822,7 @@ def invoice_create(
                             "tax_codes": ln.get("tax_codes", []),
                             "display_qty": False,
                             "source": {"quote_line": ln["id"]},
+                            "tax_fixed": _tax_left(store, ln, remaining, billed_tax),
                         }
                     )
         if not specs and kind == "final":
@@ -855,6 +936,7 @@ def invoice_create(
     total = to_decimal(totals["total"])
     return {
         "invoice": doc,
+        "estimates": [ln.get("description") or ln["id"] for ln in lines if ln.get("estimate")],
         "job_created": new_job and not dry_run,
         "deposits_held": str(held),
         "balance_after_deposits": str(total - min(held, total)),
@@ -983,7 +1065,9 @@ def _update_job_after_money(store, job: dict) -> None:
         job["status"] = "invoiced"
 
 
-def invoice_issue(store, ident: str, date=None, due_days=None, due_date=None, allow_unconfirmed_tax=False) -> dict:
+def invoice_issue(
+    store, ident: str, date=None, due_days=None, due_date=None, allow_unconfirmed_tax=False, estimates_confirmed=False
+) -> dict:
     inv = store.doc(ident, "invoice")
     if inv["status"] != "draft":
         if inv["status"] in ("issued", "paid"):
@@ -1002,7 +1086,22 @@ def invoice_issue(store, ident: str, date=None, due_days=None, due_date=None, al
             hint='jtp profile set payment.methods \'[{"name":"Bank transfer","instructions":"..."}]\'',
             code="setup_needed",
         )
+    estimated = [ln for ln in inv["lines"] if ln.get("estimate")]
+    if estimated and not estimates_confirmed:
+        names = "; ".join(ln.get("description") or ln["id"] for ln in estimated)
+        raise JTPError(
+            f"{inv['id']} still has estimated figures ({names}). Issuing makes the invoice final, so the owner "
+            "confirms them first.",
+            hint=f"If they're right: jtp invoice issue {inv['id']} --estimates-confirmed   If not: jtp invoice show "
+            f'{inv["id"]} --as-spec > inv.json, fix the line and remove "estimate", then jtp invoice update '
+            f"{inv['id']} --spec inv.json",
+            code="estimates_unconfirmed",
+        )
     day = parse_date(date or "today", store.today())
+    for ln in estimated:
+        ln.pop("estimate", None)  # confirmed by the owner: the issued invoice shows firm figures
+    if estimated:
+        inv["estimates_confirmed"] = iso(day)
     if due_date:
         due = parse_date(due_date, store.today())
     else:

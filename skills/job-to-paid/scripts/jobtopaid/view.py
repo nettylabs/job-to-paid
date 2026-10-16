@@ -131,9 +131,12 @@ def _rows(ctx: _Ctx, lines: list) -> list:
             if unit and unit.lower() not in ("ea", "each", "item", "job"):
                 qty = f"{qty} {unit}"
             unit_price = ctx.money(ln["unit_price"], extra=2)
+        desc = ln.get("description", "")
+        if ln.get("estimate"):
+            desc = f"{desc} ({ctx.labels['estimate']})"
         rows.append(
             {
-                "desc": ln.get("description", ""),
+                "desc": desc,
                 "qty": qty,
                 "unit_price": unit_price,
                 "amount": ctx.money(ln["amount"]),
@@ -199,12 +202,18 @@ def _totals_rows(ctx: _Ctx, totals: dict, final_label: str | None = None) -> lis
     return rows
 
 
-def _payment_block(ctx: _Ctx, link: str = "") -> dict:
+def payment_lines(profile: dict, number: str = "") -> list:
+    """The owner's payment methods as printable lines; {number} becomes the document number."""
     methods = []
-    for method in ctx.profile["payment"].get("methods") or []:
+    for method in profile["payment"].get("methods") or []:
         name = method.get("name", "")
-        instructions = method.get("instructions", "")
+        instructions = (method.get("instructions") or "").replace("{number}", number or "")
         methods.append(f"{name}: {instructions}" if name and instructions else name or instructions)
+    return methods
+
+
+def _payment_block(ctx: _Ctx, link: str = "", number: str = "") -> dict:
+    methods = payment_lines(ctx.profile, number)
     return {"heading": ctx.labels["how_to_pay"], "lines": methods, "link": link, "link_label": ctx.labels["pay_online"]}
 
 
@@ -302,8 +311,8 @@ def _build_view(store, doc: dict) -> dict:
                         "deposit": ctx.money(option["deposit_due"]) if option.get("deposit_due") else "",
                     }
                 )
-        if view["deposit"] and doc["status"] not in ("declined", "expired", "void"):
-            block = _payment_block(ctx)
+        if view["deposit"] and doc["status"] not in ("declined", "expired", "superseded", "void"):
+            block = _payment_block(ctx, number=doc["id"])
             if block["lines"]:
                 block["heading"] = labels["how_to_pay_deposit"]
                 view["payment"] = block
@@ -319,6 +328,8 @@ def _build_view(store, doc: dict) -> dict:
             ).strip()
         if doc["status"] == "void":
             view["stamp"] = labels["void_stamp"]
+        elif doc["status"] == "superseded":
+            view["stamp"] = labels["superseded_stamp"]
         if doc["id"] == "PREVIEW":
             view["stamp"] = labels["draft_stamp"]
         return view
@@ -385,7 +396,7 @@ def _build_view(store, doc: dict) -> dict:
                 view["intro"] + "\n" if view["intro"] else ""
             ) + f"{labels['previously_invoiced']}: {prev}%"
         if doc["status"] != "void" and state["balance"] > 0:
-            view["payment"] = _payment_block(ctx, doc.get("payment_link") or "")
+            view["payment"] = _payment_block(ctx, doc.get("payment_link") or "", doc["id"])
         view["thank_you"] = labels["thank_you"]
         if doc["status"] == "draft":
             view["stamp"] = labels["draft_stamp"]

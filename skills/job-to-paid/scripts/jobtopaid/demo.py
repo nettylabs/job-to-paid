@@ -18,31 +18,99 @@ from .store import Store
 from .util import JTPError, iso, write_json
 
 
+EVERY_KIND = ["labour", "material", "equipment", "subcontract", "fee", "other"]
+
+# Local-looking demo details. Phone numbers come from ranges kept for fiction (555-01xx in North
+# America, 020 7946 0xxx in London, 02 5550 xxxx in Australia).
+DEMO_REGIONS = {
+    "USD": {
+        "business": (["100 Example Street", "Springfield, IL 62701"], "+1 217 555 0100"),
+        "customers": [
+            (["12 Maple Avenue", "Springfield, IL 62704"], "+1 217 555 0142"),
+            (["5 Market Square", "Springfield, IL 62701"], "+1 217 555 0177"),
+            (["88 Hillside Road", "Chatham, IL 62629"], "+1 217 555 0190"),
+        ],
+        "registration": [{"label": "Tax reg. no.", "value": "DEMO-123456"}],
+        "taxes": [{"code": "TAX", "name": "Sales tax", "rate": "5", "applies_to": EVERY_KIND}],
+        "bank": (
+            "Bank transfer",
+            "Demo Bank, routing 000000000, account 12345678. Please use {number} as the reference.",
+        ),
+    },
+    "CAD": {
+        "business": (["100 Example Street", "Toronto ON M5V 2T6"], "+1 416 555 0100"),
+        "customers": [
+            (["12 Maple Avenue", "Toronto ON M4C 1B5"], "+1 416 555 0142"),
+            (["5 Market Square", "Mississauga ON L5B 3C2"], "+1 905 555 0177"),
+            (["88 Hillside Road", "Oakville ON L6J 1H1"], "+1 905 555 0190"),
+        ],
+        "registration": [{"label": "HST No.", "value": "123456789 RT0001"}],
+        "taxes": [{"code": "HST", "name": "HST", "rate": "13", "applies_to": EVERY_KIND}],
+        "bank": ("Interac e-Transfer", "Send to pay@demo-plumbing.example and put {number} in the message."),
+    },
+    "GBP": {
+        "business": (["100 Example Street", "London E1 6AN"], "+44 20 7946 0100"),
+        "customers": [
+            (["12 Maple Avenue", "London N16 0AA"], "+44 20 7946 0142"),
+            (["5 Market Square", "London SE1 9AA"], "+44 20 7946 0177"),
+            (["88 Hillside Road", "Croydon CR0 1AA"], "+44 20 7946 0190"),
+        ],
+        "registration": [{"label": "VAT reg. no.", "value": "GB 123 4567 89"}],
+        "taxes": [{"code": "VAT", "name": "VAT", "rate": "20", "applies_to": EVERY_KIND}],
+        "bank": ("Bank transfer", "Sort code 00-00-00, account 12345678. Please use {number} as the reference."),
+    },
+    "AUD": {
+        "business": (["100 Example Street", "Sydney NSW 2000"], "+61 2 5550 0100"),
+        "customers": [
+            (["12 Maple Avenue", "Parramatta NSW 2150"], "+61 2 5550 0142"),
+            (["5 Market Square", "Chatswood NSW 2067"], "+61 2 5550 0177"),
+            (["88 Hillside Road", "Manly NSW 2095"], "+61 2 5550 0190"),
+        ],
+        "registration": [{"label": "ABN", "value": "12 345 678 901"}],
+        "taxes": [{"code": "GST", "name": "GST", "rate": "10", "applies_to": EVERY_KIND}],
+        "bank": ("Bank transfer", "BSB 000-000, account 12345678. Please use {number} as the reference."),
+        "labels": {"invoice": "Tax Invoice"},
+    },
+}
+GENERIC_REGION = {
+    "business": (["100 Example Street", "Springfield"], "555 0100"),
+    "customers": [
+        (["12 Maple Avenue", "Springfield"], "555 0142"),
+        (["5 Market Square", "Springfield"], "555 0177"),
+        (["88 Hillside Road", "Shelbyville"], "555 0190"),
+    ],
+    "registration": [{"label": "Tax reg. no.", "value": "DEMO-123456"}],
+    "taxes": [{"code": "TAX", "name": "Sales tax", "rate": "5", "applies_to": EVERY_KIND}],
+    "bank": ("Bank transfer", "Demo Bank, account 12345678. Please use {number} as the reference."),
+}
+
+
+def demo_region(currency: str) -> dict:
+    return DEMO_REGIONS.get((currency or "USD").upper(), GENERIC_REGION)
+
+
 def demo_profile(currency: str = "USD") -> dict:
     profile = new_profile(currency)
+    region = demo_region(currency)
+    address, phone = region["business"]
     profile["business"].update(
         {
             "name": "Demo Plumbing & Heating",
             "trade": "Plumbing, heating and gas",
-            "address": ["100 Example Street", "Springfield"],
-            "phone": "+1 555 0100",
+            "address": list(address),
+            "phone": phone,
             "email": "office@demo-plumbing.example",
-            "registration_numbers": [{"label": "Tax reg. no.", "value": "DEMO-123456"}],
+            "registration_numbers": [dict(r) for r in region["registration"]],
         }
     )
     profile["tax"] = {
         "confirmed": True,
         "prices_include_tax": False,
-        "taxes": [
-            {
-                "code": "TAX",
-                "name": "Sales tax",
-                "rate": "5",
-                "applies_to": ["labour", "material", "equipment", "subcontract", "fee", "other"],
-            }
-        ],
+        "taxes": [dict(t, applies_to=list(t["applies_to"])) for t in region["taxes"]],
         "note": "",
     }
+    if region.get("labels"):
+        profile["labels"] = dict(region["labels"])
     profile["rates"].update(
         {
             "labour": [
@@ -66,12 +134,10 @@ def demo_profile(currency: str = "USD") -> dict:
             "warranty": "12-month workmanship warranty. Manufacturer warranties apply to equipment.",
         }
     )
+    bank_name, bank_instructions = region["bank"]
     profile["payment"]["methods"] = [
-        {
-            "name": "Bank transfer",
-            "instructions": "Demo Bank, account 12345678. Use your invoice number as the reference.",
-        },
-        {"name": "Card", "instructions": "Use the Pay online button when there is one, or call us."},
+        {"name": bank_name, "instructions": bank_instructions},
+        {"name": "Card", "instructions": f"Call us on {phone} to pay by card."},
     ]
     profile["followups"]["review_link"] = "https://example.com/review-demo-plumbing"
     return profile
@@ -107,13 +173,14 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
     store.save_profile(profile)
     for item in PRICEBOOK:
         records.pricebook_add(store, item)
+    places = demo_region(currency)["customers"]
     jane = records.customer_add(
         store,
         {
             "name": "Jane Doe",
             "email": "jane@example.com",
-            "phone": "+1 555 0142",
-            "address": ["12 Maple Avenue", "Springfield"],
+            "phone": places[0][1],
+            "address": list(places[0][0]),
             "preferred_contact": "email",
         },
     )["customer"]
@@ -123,8 +190,8 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
             "name": "Bob Martin",
             "company": "Bob's Bakery Ltd",
             "email": "bob@bakery.example",
-            "phone": "+1 555 0177",
-            "address": ["5 Market Square", "Springfield"],
+            "phone": places[1][1],
+            "address": list(places[1][0]),
         },
     )["customer"]
     priya = records.customer_add(
@@ -132,8 +199,8 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
         {
             "name": "Priya Patel",
             "email": "priya@example.com",
-            "phone": "+1 555 0190",
-            "address": ["88 Hillside Road", "Shelbyville"],
+            "phone": places[2][1],
+            "address": list(places[2][0]),
         },
     )["customer"]
     made = {"customers": [jane["id"], bakery["id"], priya["id"]]}
@@ -358,11 +425,16 @@ def selftest() -> dict:
             co_total = Decimal(store.doc(co["change_order"]["id"])["totals"]["total"])
             billed = Decimal(store.doc(progress["id"])["totals"]["total"]) + Decimal(final["totals"]["total"])
             extra = sum(
-                Decimal(ln["amount"]) for ln in final["lines"] if (ln.get("source") or {}).get("log")
-            ) * Decimal("1.05")
+                (
+                    Decimal(ln["net"]) + sum((Decimal(v) for v in ln["tax_amounts"].values()), Decimal(0))
+                    for ln in final["lines"]
+                    if (ln.get("source") or {}).get("log")
+                ),
+                Decimal(0),
+            )
             check(
-                "progress + final bill the quote and change order exactly",
-                abs(billed - option_total - co_total - extra) <= Decimal("0.02"),
+                "progress + final bill the quote and change order to the cent",
+                billed == option_total + co_total + extra,
                 f"{billed} vs {option_total} + {co_total} + {extra}",
             )
             docs.invoice_issue(store, final["id"])

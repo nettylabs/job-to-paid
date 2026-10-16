@@ -127,6 +127,8 @@ def _quote_summary(store, doc) -> str:
         parts.append(f"{label}{star}: {_money(store, option['totals']['total'])}")
     rev = f" rev {doc['revision']}" if doc.get("revision", 1) > 1 else ""
     status = doc["status"]
+    if status == "superseded" and (doc.get("superseded") or {}).get("by"):
+        status = f"replaced by {doc['superseded']['by']}"
     accepted = doc.get("accepted") or {}
     if status == "accepted" and accepted:
         status = f"accepted, option {accepted['option']}" if many else "accepted"
@@ -204,7 +206,7 @@ def _slim(store, doc: dict) -> dict:
             if option.get("deposit_due"):
                 item["deposit_due"] = option["deposit_due"]
             out["options"].append(item)
-        for key in ("accepted", "declined"):
+        for key in ("accepted", "declined", "superseded"):
             if doc.get(key):
                 out[key] = doc[key]
     elif doc["type"] == "invoice":
@@ -521,8 +523,15 @@ def cmd_job(store, args):
     raise JTPError("Unknown job action.")
 
 
+def _need_id(args, noun: str, example: str) -> None:
+    if not getattr(args, "id", None):
+        raise JTPError(f"Say which {noun}.", hint=f"For example: jtp {args.command} {args.action} {example}")
+
+
 def cmd_quote(store, args):
     a = args.action
+    if a not in ("create", "list"):
+        _need_id(args, "quote", "Q-0001")
     if a == "create":
         spec = _spec(args.spec)
         if spec is None:
@@ -601,7 +610,15 @@ def cmd_quote(store, args):
                 f"Deposit due: {out['deposit_due_display']}. When it arrives: "
                 f"jtp payment record --job {out.get('job')} --deposit --amount {out['deposit_due']}"
             )
+        if out.get("replaced_quotes"):
+            out["note"] = (
+                f"Also marked {', '.join(out['replaced_quotes'])} as replaced (other quotes on this job), so they "
+                "get no more follow-ups."
+            )
         _render(store, args, out["quote"], out)
+        return _status_out(store, out, "quote", _quote_summary)
+    if a == "supersede":
+        out = docs.quote_supersede(store, args.id, args.with_quote, args.date)
         return _status_out(store, out, "quote", _quote_summary)
     if a == "decline":
         return _status_out(store, docs.quote_decline(store, args.id, args.reason, args.date), "quote", _quote_summary)
@@ -622,6 +639,8 @@ def _status_out(store, out: dict, key: str, summarize) -> dict:
 
 def cmd_co(store, args):
     a = args.action
+    if a not in ("create", "list"):
+        _need_id(args, "change order", "CO-0001")
     if a == "create":
         spec = _spec(args.spec)
         if spec is None:
@@ -674,6 +693,8 @@ def cmd_co(store, args):
 
 def cmd_invoice(store, args):
     a = args.action
+    if a not in ("create", "list"):
+        _need_id(args, "invoice", "INV-0001")
     if a == "create":
         from_quote = args.from_quote if args.from_quote not in (None, "") else (True if args.from_quote == "" else None)
         spec = _spec(args.spec)
@@ -697,7 +718,14 @@ def cmd_invoice(store, args):
             store, out["invoice"]
         )
         if not args.dry_run:
-            out["next"] = f"Show the owner the draft; once they OK it: jtp invoice issue {out['invoice']['id']}"
+            inv_id = out["invoice"]["id"]
+            out["next"] = f"Show the owner the draft; once they OK it: jtp invoice issue {inv_id}"
+            if out.get("estimates"):
+                out["next"] = (
+                    f"Some figures were estimates on the quote ({'; '.join(out['estimates'])}). Ask the owner for the "
+                    f"real figures and fix the draft if they changed (jtp invoice update {inv_id} --spec ...). When "
+                    f"the owner confirms, issue it: jtp invoice issue {inv_id} --estimates-confirmed"
+                )
         _render(store, args, out["invoice"], out)
         return out
     if a == "update":
@@ -706,7 +734,15 @@ def cmd_invoice(store, args):
         _render(store, args, out["invoice"], out)
         return out
     if a == "issue":
-        out = docs.invoice_issue(store, args.id, args.date, args.due_days, args.due_date, args.allow_unconfirmed_tax)
+        out = docs.invoice_issue(
+            store,
+            args.id,
+            args.date,
+            args.due_days,
+            args.due_date,
+            args.allow_unconfirmed_tax,
+            estimates_confirmed=args.estimates_confirmed,
+        )
         _render(store, args, out["invoice"], out)
         return _status_out(store, out, "invoice", _invoice_summary)
     if a == "show":
@@ -801,6 +837,8 @@ def cmd_credit(store, args):
                 "--channel email --to <address>"
             )
         return out
+    if args.action in ("show", "mark-sent"):
+        _need_id(args, "credit note", "CN-0001")
     if args.action == "show":
         doc = store.doc(args.id, "credit_note")
         return {"credit_note": doc, "summary": _credit_summary(store, doc)}
@@ -1078,7 +1116,7 @@ def build_parser() -> argparse.ArgumentParser:
             'jtp profile set tax.taxes \'[{"code":"GST","name":"GST","rate":"5"}]\'',
             "jtp profile set tax.confirmed true",
             'jtp profile set rates.labour \'[{"key":"standard","name":"Labour","rate":"95","cost":"45"}]\'',
-            'jtp profile set payment.methods \'[{"name":"Bank transfer","instructions":"Acct 123, ref invoice no."}]\'',
+            'jtp profile set payment.methods \'[{"name":"Bank transfer","instructions":"Acct 123. Use {number} as the reference"}]\'',
         ],
         cmd_profile,
     )
@@ -1229,11 +1267,13 @@ def build_parser() -> argparse.ArgumentParser:
             "jtp quote show Q-0001 --as-spec",
             "jtp quote extend Q-0001 --days 14",
             "jtp quote decline Q-0001 --reason 'Went with cheaper'",
+            "jtp quote supersede Q-0001 --with Q-0004   (replaced by a newer quote: no more follow-ups)",
         ],
         cmd_quote,
     )
     p.add_argument(
-        "action", choices=["create", "revise", "show", "list", "mark-sent", "accept", "decline", "extend", "expire"]
+        "action",
+        choices=["create", "revise", "show", "list", "mark-sent", "accept", "decline", "extend", "expire", "supersede"],
     )
     p.add_argument("id", nargs="?")
     for flag in (
@@ -1256,6 +1296,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(flag, help=FLAG_HELP.get(flag))
     p.add_argument("--days", type=int)
     p.add_argument("--dry-run", action="store_true", help="Price it without saving (writes output/PREVIEW.pdf)")
+    p.add_argument("--with", dest="with_quote", help="The quote that replaced this one (supersede)")
     p.add_argument("--as-spec", action="store_true", help="Show as an editable spec")
 
     p = _add(
@@ -1323,6 +1364,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--due-days", type=int)
     p.add_argument("--external", action="append", help="key=value id in another system, e.g. xero=INV-88")
     p.add_argument("--allow-unconfirmed-tax", action="store_true")
+    p.add_argument(
+        "--estimates-confirmed",
+        action="store_true",
+        help="The owner confirmed the lines that were estimates (issue)",
+    )
     p.add_argument("--dry-run", action="store_true", help="Preview it (output/PREVIEW.pdf) without saving")
     p.add_argument("--as-spec", action="store_true")
 

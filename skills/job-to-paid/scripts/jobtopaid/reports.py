@@ -207,6 +207,7 @@ def job_summary(store, job_id: str) -> dict:
         cn = store.doc(cn_id, "credit_note")
         net_sales -= to_decimal(cn["totals"]["net_excl_tax"])
     deposits = sum((to_decimal(p.get("remaining", "0")) for p in job.get("payments", [])), ZERO)
+    received = paid + deposits
     costs = job_costs(store, job)
     unbilled = unbilled_value(store, job)
     out = {
@@ -219,10 +220,11 @@ def job_summary(store, job_id: str) -> dict:
         "approved_change_orders": _fmt(store, approved),
         "change_orders_waiting": pending,
         "invoiced": _fmt(store, invoiced),
-        "paid": _fmt(store, paid),
+        "received": _fmt(store, received),
+        "paid_on_invoices": _fmt(store, paid),
+        "deposits_held": _fmt(store, deposits),
         "credits": _fmt(store, credits),
         "owing": _fmt(store, owing),
-        "deposits_not_yet_applied": _fmt(store, deposits),
         "unbilled_logged_work": _fmt(store, unbilled),
         "invoices": invoices,
         "hours_logged": trim_decimal(costs["hours"]),
@@ -236,6 +238,16 @@ def job_summary(store, job_id: str) -> dict:
         },
         "net_sales_excl_tax": _fmt(store, net_sales),
     }
+    parts = []
+    if quoted is not None:
+        parts.append(
+            f"quoted {_fmt(store, quoted)}" + (f" + approved changes {_fmt(store, approved)}" if approved else "")
+        )
+    parts.append(f"invoiced {_fmt(store, invoiced)}")
+    held_text = f" (incl. {_fmt(store, deposits)} deposit not yet invoiced)" if deposits else ""
+    parts.append(f"received {_fmt(store, received)}{held_text}")
+    parts.append(f"owing {_fmt(store, owing)}")
+    out["summary"] = f"{job['id']} {job['title']}: " + ", ".join(parts)
     if net_sales and costs["total"]:
         margin = net_sales - costs["total"]
         out["margin"] = _fmt(store, margin)
@@ -251,9 +263,10 @@ def customer_summary(store, customer_id: str) -> dict:
     cust = store.customer(customer_id)
     day = store.today()
     jobs = [j for j in store.jobs() if j["customer_id"] == cust["id"]]
-    lifetime = owing = ZERO
+    lifetime = owing = held = ZERO
     history = []
     for job in jobs:
+        held += sum((to_decimal(p.get("remaining", "0")) for p in job.get("payments", [])), ZERO)
         for inv_id in job.get("invoices", []):
             inv = store.doc(inv_id, "invoice")
             if inv["status"] not in ("issued", "paid"):
@@ -262,7 +275,13 @@ def customer_summary(store, customer_id: str) -> dict:
             lifetime += state["total"] - state["credits"]
             owing += max(state["balance"], ZERO)
         history.append({"job": job["id"], "title": job["title"], "status": job["status"], "created": job["created"]})
-    return {"customer": cust, "jobs": history, "lifetime_billed": _fmt(store, lifetime), "owing": _fmt(store, owing)}
+    return {
+        "customer": cust,
+        "jobs": history,
+        "lifetime_billed": _fmt(store, lifetime),
+        "owing": _fmt(store, owing),
+        "deposits_held": _fmt(store, held),
+    }
 
 
 # ------------------------------------------------------------------ brief
@@ -297,8 +316,9 @@ def brief(store, day=None) -> dict:
 
     quotes_waiting = []
     waiting_total = ZERO
+    accepted_job_quote = {j["id"]: j.get("accepted_quote") for j in store.jobs()}
     for doc in store.docs("quote"):
-        if doc["status"] != "sent":
+        if doc["status"] != "sent" or accepted_job_quote.get(doc["job_id"]) not in (None, doc["id"]):
             continue
         best = max(doc["options"], key=lambda o: (o.get("recommended", False), 0))
         total = to_decimal(best["totals"]["total"])

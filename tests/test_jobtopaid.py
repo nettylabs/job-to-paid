@@ -450,6 +450,122 @@ class WorkflowTests(StoreCase):
         self.assertIn("Sample Customer", html)
         self.assertIn("DRAFT", html)
 
+    def _fixed_quote(self, lines, job_id=None, **extra):
+        spec = dict({"title": "Fixed", "lines": lines}, **extra)
+        if job_id:
+            return docs.quote_create(self.store, spec, job_id=job_id)["quote"]
+        return docs.quote_create(self.store, spec, customer_id=self.cust["id"])["quote"]
+
+    def test_invoice_equals_quote_plus_change_orders_to_the_cent(self):
+        # Rounding tax on the combined total would make this invoice a cent more than the two documents.
+        lines = [
+            {"kind": "other", "description": d, "unit_price": p}
+            for d, p in (("A", "1687.50"), ("B", "81.25"), ("C", "427.50"))
+        ]
+        quote = self._fixed_quote(lines)
+        job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+        co = docs.co_create(
+            self.store,
+            job_id,
+            {
+                "title": "Valve",
+                "lines": [
+                    {"kind": "other", "description": "Valve", "unit_price": "30"},
+                    {"kind": "other", "description": "Fit valve", "unit_price": "71.25"},
+                ],
+            },
+        )["change_order"]
+        docs.co_approve(self.store, co["id"], "Jane", "text", None)
+        invoice = docs.invoice_create(self.store, job_id=job_id)["invoice"]
+        quoted = Decimal(self.store.doc(quote["id"])["options"][0]["totals"]["total"])
+        changed = Decimal(self.store.doc(co["id"])["totals"]["total"])
+        self.assertEqual(Decimal(invoice["totals"]["total"]), quoted + changed)
+
+    def test_progress_invoices_add_up_to_the_quote_to_the_cent(self):
+        quote = self._fixed_quote([{"kind": "other", "description": "Work", "unit_price": "101"}])
+        job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+        first = docs.invoice_create(self.store, job_id=job_id, progress="30")["invoice"]
+        docs.invoice_issue(self.store, first["id"])
+        final = docs.invoice_create(self.store, job_id=job_id)["invoice"]
+        quoted = Decimal(self.store.doc(quote["id"])["options"][0]["totals"]["total"])  # 106.05
+        self.assertEqual(Decimal(first["totals"]["total"]) + Decimal(final["totals"]["total"]), quoted)
+
+    def test_accepting_a_quote_retires_the_other_quotes_on_its_job(self):
+        first = self._fixed_quote([{"kind": "fee", "description": "Option one", "unit_price": "100"}])
+        second = self._fixed_quote(
+            [{"kind": "fee", "description": "Option two", "unit_price": "150"}], job_id=first["job_id"]
+        )
+        for doc in (first, second):
+            docs.quote_mark_sent(self.store, doc["id"], "email", "jane@example.com")
+        out = docs.quote_accept(self.store, second["id"], None, "Jane", "email", None)
+        self.assertEqual(out["replaced_quotes"], [first["id"]])
+        self.assertEqual(self.store.doc(first["id"])["status"], "superseded")
+        os.environ["JTP_TODAY"] = "2026-11-01"
+        quoted = [a["doc"] for a in followups.due_actions(self.store) if a["action"].startswith("quote")]
+        self.assertNotIn(first["id"], quoted)
+        with self.assertRaises(JTPError):
+            docs.quote_accept(self.store, first["id"], None, "Jane", "email", None)
+
+    def test_old_quote_on_another_job_gets_a_heads_up(self):
+        old = self._fixed_quote([{"kind": "fee", "description": "Old", "unit_price": "100"}])
+        docs.quote_mark_sent(self.store, old["id"], "email", "jane@example.com")
+        created = docs.quote_create(
+            self.store,
+            {"title": "New", "lines": [{"kind": "fee", "description": "New", "unit_price": "120"}]},
+            customer_id=self.cust["id"],
+        )
+        self.assertTrue(any(old["id"] in w for w in created["warnings"]))
+        docs.quote_accept(self.store, created["quote"]["id"], None, "Jane", "email", None)
+        os.environ["JTP_TODAY"] = "2026-10-20"
+        nudge = next(a for a in followups.due_actions(self.store) if a.get("doc") == old["id"])
+        self.assertIn(f"jtp quote supersede {old['id']} --with {created['quote']['id']}", nudge["heads_up"])
+        docs.quote_supersede(self.store, old["id"], created["quote"]["id"])
+        self.assertFalse([a for a in followups.due_actions(self.store) if a.get("doc") == old["id"]])
+
+    def test_estimates_stay_estimates_until_the_owner_confirms(self):
+        quote = self._fixed_quote(
+            [
+                {"kind": "labour", "description": "Install", "qty": 3, "estimate": True},
+                {"kind": "fee", "description": "Call-out", "unit_price": "80"},
+            ]
+        )
+        html = Path(render_doc(self.store, self.store.doc(quote["id"]), fmt="html", engine="builtin")["files"]["html"])
+        self.assertIn("Install (estimate)", html.read_text(encoding="utf-8"))
+        job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+        created = docs.invoice_create(self.store, job_id=job_id)
+        self.assertEqual(created["estimates"], ["Install"])
+        with self.assertRaises(JTPError) as caught:
+            docs.invoice_issue(self.store, created["invoice"]["id"])
+        self.assertEqual(caught.exception.code, "estimates_unconfirmed")
+        issued = docs.invoice_issue(self.store, created["invoice"]["id"], estimates_confirmed=True)["invoice"]
+        self.assertFalse([ln for ln in issued["lines"] if ln.get("estimate")])
+
+    def test_deposits_count_as_received(self):
+        quote = self._fixed_quote([{"kind": "fee", "description": "Work", "unit_price": "1000"}])
+        job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+        docs.payment_record(self.store, job_id=job_id, amount="250", method="Bank", deposit=True)
+        summary = reports.job_summary(self.store, job_id)
+        self.assertEqual((summary["received"], summary["deposits_held"]), ("$250.00", "$250.00"))
+        self.assertIn("received $250.00", summary["summary"])
+
+    def test_payment_instructions_name_the_document(self):
+        profile = self.store.profile()
+        profile["payment"]["methods"] = [{"name": "Bank", "instructions": "Use {number} as the reference."}]
+        profile["terms"]["deposit_percent"] = "25"
+        self.store.save_profile(profile)
+        quote = self._fixed_quote([{"kind": "fee", "description": "Work", "unit_price": "1000"}])
+        html = Path(render_doc(self.store, self.store.doc(quote["id"]), fmt="html", engine="builtin")["files"]["html"])
+        self.assertIn(f"Use {quote['id']} as the reference.", html.read_text(encoding="utf-8"))
+
+    def test_demo_looks_local(self):
+        ca = Store(Path(self.tmp.name) / "demo-ca")
+        seed(ca, "CAD")
+        self.assertEqual([t["code"] for t in ca.profile()["tax"]["taxes"]], ["HST"])
+        self.assertIn("Toronto", " ".join(ca.profile()["business"]["address"]))
+        au = Store(Path(self.tmp.name) / "demo-au")
+        seed(au, "AUD", history=False)
+        self.assertEqual(au.profile()["labels"]["invoice"], "Tax Invoice")
+
     def test_reminder_ladder(self):
         inv = docs.invoice_create(
             self.store,

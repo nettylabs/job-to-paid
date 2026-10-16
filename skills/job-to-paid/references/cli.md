@@ -91,7 +91,7 @@ Examples:
   jtp profile set tax.taxes '[{"code":"GST","name":"GST","rate":"5"}]'
   jtp profile set tax.confirmed true
   jtp profile set rates.labour '[{"key":"standard","name":"Labour","rate":"95","cost":"45"}]'
-  jtp profile set payment.methods '[{"name":"Bank transfer","instructions":"Acct 123, ref invoice no."}]'
+  jtp profile set payment.methods '[{"name":"Bank transfer","instructions":"Acct 123. Use {number} as the reference"}]'
 ```
 
 ## numbering
@@ -261,8 +261,8 @@ Examples:
 usage: jtp quote [-h] [--job JOB] [--customer CUSTOMER] [--spec SPEC] [--title TITLE] [--channel CHANNEL]
                  [--to TO] [--option OPTION] [--by BY] [--method METHOD] [--note NOTE] [--reason REASON]
                  [--date DATE] [--until UNTIL] [--status STATUS] [--tags TAGS] [--days DAYS] [--dry-run]
-                 [--as-spec]
-                 {create,revise,show,list,mark-sent,accept,decline,extend,expire} [id]
+                 [--with WITH_QUOTE] [--as-spec]
+                 {create,revise,show,list,mark-sent,accept,decline,extend,expire,supersede} [id]
 
 Create, revise, send-track, accept or decline quotes.
 
@@ -286,7 +286,7 @@ Add "tax_codes": [] (no tax) or ["GST"] only when the owner says that line is ta
 --dry-run prices it without saving and writes output/PREVIEW.pdf to show the owner.
 
 positional arguments:
-  {create,revise,show,list,mark-sent,accept,decline,extend,expire}
+  {create,revise,show,list,mark-sent,accept,decline,extend,expire,supersede}
   id
 
 options:
@@ -309,6 +309,7 @@ options:
   --tags TAGS           Job-type tags, comma separated (e.g. 'water heater,gas')
   --days DAYS
   --dry-run             Price it without saving (writes output/PREVIEW.pdf)
+  --with WITH_QUOTE     The quote that replaced this one (supersede)
   --as-spec             Show as an editable spec
 
 Examples:
@@ -321,6 +322,7 @@ Examples:
   jtp quote show Q-0001 --as-spec
   jtp quote extend Q-0001 --days 14
   jtp quote decline Q-0001 --reason 'Went with cheaper'
+  jtp quote supersede Q-0001 --with Q-0004   (replaced by a newer quote: no more follow-ups)
 ```
 
 ## co
@@ -364,7 +366,7 @@ usage: jtp invoice [-h] [--job JOB] [--customer CUSTOMER] [--spec SPEC] [--title
                    [--payment-link PAYMENT_LINK] [--notes NOTES] [--status STATUS] [--tags TAGS]
                    [--from-quote [FROM_QUOTE]] [--progress PROGRESS] [--deposit-invoice DEPOSIT_INVOICE]
                    [--tm] [--no-change-orders] [--no-extras] [--due-days DUE_DAYS] [--external EXTERNAL]
-                   [--allow-unconfirmed-tax] [--dry-run] [--as-spec]
+                   [--allow-unconfirmed-tax] [--estimates-confirmed] [--dry-run] [--as-spec]
                    {create,update,issue,show,list,mark-sent,set,void,delete} [id]
 
 Create, issue, track and correct invoices.
@@ -400,6 +402,8 @@ options:
   --due-days DUE_DAYS
   --external EXTERNAL   key=value id in another system, e.g. xero=INV-88
   --allow-unconfirmed-tax
+  --estimates-confirmed
+                        The owner confirmed the lines that were estimates (issue)
   --dry-run             Preview it (output/PREVIEW.pdf) without saving
   --as-spec
 

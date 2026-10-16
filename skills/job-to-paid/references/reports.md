@@ -9,7 +9,7 @@ jtp report profit --from 2026-07-01 --to 2026-09-30
 jtp report pricing --tag "water heater"     # real hours vs quoted hours for this kind of job
 jtp report tax --from 2026-07-01 --to 2026-09-30               # add --basis cash if they report on payments
 jtp report sales --from 2026-01-01          # invoiced and collected per month, quote win rate, days to pay
-jtp job show J-0004                         # one job: quoted, billed, paid, owing, hours, costs, margin
+jtp job show J-0004                         # one job: quoted, invoiced, received (deposits too), owing, hours, costs, margin
 jtp customer show C-0001                    # one customer: jobs, lifetime billed, owing
 jtp search "jane water heater"              # find anything
 jtp export invoices --from 2026-07-01 --to 2026-09-30    # CSV for the accountant

@@ -59,6 +59,8 @@ DEFAULT_LABELS = {
     "paid_stamp": "PAID",
     "void_stamp": "VOID",
     "draft_stamp": "DRAFT",
+    "superseded_stamp": "REPLACED",
+    "estimate": "estimate",
     "payments_received": "Payments received",
     "previously_invoiced": "Previously invoiced",
     "payment_received": "Payment received",

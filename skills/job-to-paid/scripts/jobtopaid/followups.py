@@ -55,9 +55,17 @@ def due_actions(store, day: _dt.date | None = None) -> list:
     quote_days = sorted(int(d) for d in cfg.get("quote_days") or [])
     invoice_days = sorted(int(d) for d in cfg.get("invoice_days") or [])
     actions = []
+    quotes = store.docs("quote")
+    accepted_job_quote = {j["id"]: j.get("accepted_quote") for j in store.jobs()}
+    accepted_by_customer = {}
+    for doc in quotes:
+        if doc["status"] == "accepted" and doc.get("accepted"):
+            accepted_by_customer.setdefault(doc["customer_id"], []).append(doc)
 
-    for doc in store.docs("quote"):
+    for doc in quotes:
         status = doc["status"]
+        if accepted_job_quote.get(doc["job_id"]) not in (None, doc["id"]):
+            continue  # its job went ahead with another quote
         if status == "draft":
             created = from_iso(doc.get("date"))
             if created and (day - created).days >= 1:
@@ -264,25 +272,53 @@ def due_actions(store, day: _dt.date | None = None) -> list:
         "review_request": 8,
     }
     actions.sort(key=lambda a: (order.get(a["action"], 9), -a.get("days_overdue", 0)))
+    _flag_replaced_quotes(store, actions, quotes, accepted_by_customer)
     _decorate(store, actions)
     return actions
+
+
+def _flag_replaced_quotes(store, actions: list, quotes: list, accepted_by_customer: dict) -> None:
+    """A customer who accepted a newer quote (on another job) may not want the old one chased."""
+    from .view import format_date  # local import avoids a cycle
+
+    fmt = store.profile()["locale"].get("date_format")
+    by_id = {d["id"]: d for d in quotes}
+    for action in actions:
+        doc = (
+            by_id.get(action.get("doc"))
+            if action["action"] in ("send_quote", "quote_followup", "quote_expired")
+            else None
+        )
+        if not doc:
+            continue
+        since = min([s["date"] for s in doc.get("sent") or []] or [doc.get("date") or ""])
+        later = [
+            d
+            for d in accepted_by_customer.get(doc["customer_id"], [])
+            if d["id"] != doc["id"] and d["accepted"].get("date", "") >= since
+        ]
+        if later:
+            other = later[-1]
+            when = format_date(from_iso(other["accepted"]["date"]), fmt)
+            action["heads_up"] = (
+                f"The customer accepted {other['id']} ({other['title']}) on {when}. If that replaced this quote, "
+                f"don't chase it: jtp quote supersede {doc['id']} --with {other['id']}. Otherwise ask the owner first."
+            )
 
 
 def _decorate(store, actions: list) -> None:
     """Add owner-format dates and payment instructions, so messages need no reformatting."""
     from .view import format_date  # local import avoids a cycle
 
+    from .view import payment_lines
+
     fmt = store.profile()["locale"].get("date_format")
-    methods = []
-    for method in store.profile()["payment"].get("methods") or []:
-        name, instructions = method.get("name", ""), method.get("instructions", "")
-        methods.append(f"{name}: {instructions}" if name and instructions else name or instructions)
     for action in actions:
         for key in ("due_date", "valid_until", "created", "service_due", "completed"):
             if action.get(key):
                 action[f"{key}_display"] = format_date(from_iso(action[key]), fmt)
         if action["action"] in ("payment_reminder", "send_invoice", "escalate"):
-            action["how_to_pay"] = methods
+            action["how_to_pay"] = payment_lines(store.profile(), action.get("doc", ""))
         card = action.get("customer") or {}
         company, name = card.get("company"), card.get("name")
         card["display_name"] = (

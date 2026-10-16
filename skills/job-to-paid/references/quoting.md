@@ -10,6 +10,9 @@ From the owner's message, voice note transcript, photos or notes, pull out:
 - **Customer**: `jtp customer list --search "<name or phone>"`. If they're new:
   `jtp customer add --name ... --phone ... --email ... --address "line 1; line 2"`.
   Adding is safe to repeat: a matching email or phone returns the existing customer.
+- **Existing work**: `jtp job list --customer C-0001`. If there's already a job or an open quote for
+  this work, revise that quote or create the new one with `--job J-0003`, so the customer doesn't
+  get follow-ups for both. (The toolkit warns when a customer already has open quotes.)
 - **Site address** if it's different from their billing address (`"site_address"` in the spec).
 - **Scope**: what will be done, in words the customer understands.
 - **Materials and equipment**, with the owner's cost if they said it.
@@ -36,7 +39,9 @@ Use, in this order:
 4. History: `jtp report pricing --tag "<type>"` shows how long this kind of job really took versus
    what was quoted. If they usually run over, say so and suggest the realistic hours.
 5. Only if needed, a researched estimate (supplier website, catalogue). Mark it `"estimate": true`,
-   tell the owner the source, and get their OK before sending.
+   tell the owner the source, and get their OK before sending. The quote prints "(estimate)" next to
+   it: remove the flag once the owner confirms the figure, or keep it if the line really is an
+   allowance to be billed at the actual cost.
 
 ### Forgotten-costs checklist
 
@@ -144,7 +149,10 @@ jtp quote extend Q-0001 --days 14            # expired or about to expire
 ## 6. Yes or no
 
 - **Yes**: `jtp quote accept Q-0001 --option B --by "Jane Doe" --method email --note "Reply 14 Oct"`.
-  Record exactly how they accepted (email reply, signed PDF, text). If there's a deposit, the output
+  Record exactly how they accepted (email reply, signed PDF, text). Any other open quotes on the same
+  job are marked as replaced automatically, so they stop getting follow-ups (the output lists them).
+  If an older quote on a *different* job was for the same work, retire it too:
+  `jtp quote supersede Q-0002 --with Q-0004`. If there's a deposit, the output
   says how much (`deposit_due_display`); send a deposit request if they haven't paid (messages.md). When it arrives,
   record it with `jtp payment record --job J-0004 --deposit --amount <amount> --method "e-Transfer"
   --reference <their reference>`. If the owner gives a percentage instead ("she paid the 25%"), use
