@@ -16,11 +16,12 @@ from pathlib import Path
 class JTPError(Exception):
     """An error the user or agent can act on. `hint` says what to do next."""
 
-    def __init__(self, message: str, hint: str | None = None, code: str = "error"):
+    def __init__(self, message: str, hint: str | None = None, code: str = "error", ask_owner: str | None = None):
         super().__init__(message)
         self.message = message
         self.hint = hint
         self.code = code
+        self.ask_owner = ask_owner  # a question only the owner can answer
 
 
 # --------------------------------------------------------------------------

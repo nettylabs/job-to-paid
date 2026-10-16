@@ -364,7 +364,7 @@ usage: jtp invoice [-h] [--job JOB] [--customer CUSTOMER] [--spec SPEC] [--title
                    [--payment-link PAYMENT_LINK] [--notes NOTES] [--status STATUS] [--tags TAGS]
                    [--from-quote [FROM_QUOTE]] [--progress PROGRESS] [--deposit-invoice DEPOSIT_INVOICE]
                    [--tm] [--no-change-orders] [--no-extras] [--due-days DUE_DAYS] [--external EXTERNAL]
-                   [--allow-unconfirmed-tax] [--estimates-confirmed] [--dry-run] [--as-spec]
+                   [--allow-unconfirmed-tax] [--owner-confirmed WORDS] [--dry-run] [--as-spec]
                    {create,update,issue,show,list,mark-sent,set,void,delete} [id]
 
 Create, issue, track and correct invoices.
@@ -400,8 +400,8 @@ options:
   --due-days DUE_DAYS
   --external EXTERNAL   key=value id in another system, e.g. xero=INV-88
   --allow-unconfirmed-tax
-  --estimates-confirmed
-                        The owner confirmed the lines that were estimates (issue)
+  --owner-confirmed WORDS
+                        Issue: the owner's own words confirming the estimated figures (kept on the invoice)
   --dry-run             Preview it (previews/PREVIEW.pdf) without saving
   --as-spec
 

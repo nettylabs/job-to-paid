@@ -149,10 +149,11 @@ jtp quote extend Q-0001 --days 14            # expired or about to expire
 ## 6. Yes or no
 
 - **Yes**: `jtp quote accept Q-0001 --option B --by "Jane Doe" --method email --note "Reply 14 Oct"`.
-  Record exactly how they accepted (email reply, signed PDF, text). Any other open quotes on the same
-  job are marked as replaced automatically, so they stop getting follow-ups (the output lists them).
-  If an older quote on a *different* job was for the same work, retire it too:
-  `jtp quote supersede Q-0002 --with Q-0004`. If there's a deposit, the output
+  Record exactly how they accepted (email reply, signed PDF, text). A job bills one quote, so any
+  other open quotes on the same job are marked as replaced automatically and stop getting follow-ups;
+  tell the owner which ones (the output lists them). If the customer has open quotes on *other* jobs,
+  the output asks (`ask_owner`) whether this acceptance replaces any of them. If the owner says yes,
+  retire each one: `jtp quote supersede Q-0002 --with Q-0004`. If there's a deposit, the output
   says how much (`deposit_due_display`); send a deposit request if they haven't paid (messages.md). When it arrives,
   record it with `jtp payment record --job J-0004 --deposit --amount <amount> --method "e-Transfer"
   --reference <their reference>`. If the owner gives a percentage instead ("she paid the 25%"), use

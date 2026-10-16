@@ -620,6 +620,15 @@ def cmd_quote(store, args):
                 f"Deposit due: {out['deposit_due_display']}. When it arrives: "
                 f"jtp payment record --job {out.get('job')} --deposit --amount {out['deposit_due']}"
             )
+        if out.get("other_open_quotes"):
+            listed = "; ".join(f"{o['id']} ({o['title']}, job {o['job']})" for o in out["other_open_quotes"])
+            out["ask_owner"] = (
+                f"{_cust_name(store, out['quote']['customer_id'])} also has open quote(s): {listed}. Did they accept "
+                f"{out['quote']['id']} instead of any of these?"
+            )
+            out["next"] = (
+                f"If the owner says yes, retire each one: jtp quote supersede <id> --with {out['quote']['id']}"
+            )
         if out.get("replaced_quotes"):
             out["note"] = (
                 f"Also marked {', '.join(out['replaced_quotes'])} as replaced (other quotes on this job), so they "
@@ -733,8 +742,8 @@ def cmd_invoice(store, args):
             if out.get("estimates"):
                 out["next"] = (
                     f"Some figures were estimates on the quote ({'; '.join(out['estimates'])}). Ask the owner for the "
-                    f"real figures and fix the draft if they changed (jtp invoice update {inv_id} --spec ...). When "
-                    f"the owner confirms, issue it: jtp invoice issue {inv_id} --estimates-confirmed"
+                    f"real figures and fix the draft if they changed (jtp invoice update {inv_id} --spec ...). Once "
+                    f'they confirm: jtp invoice issue {inv_id} --owner-confirmed "<their exact words>"'
                 )
         _render(store, args, out["invoice"], out)
         return out
@@ -751,8 +760,11 @@ def cmd_invoice(store, args):
             args.due_days,
             args.due_date,
             args.allow_unconfirmed_tax,
-            estimates_confirmed=args.estimates_confirmed,
+            owner_confirmed=args.owner_confirmed,
         )
+        confirmed = out["invoice"].get("estimates_confirmed") or {}
+        if args.owner_confirmed and confirmed.get("owner_said"):
+            out["note"] = f'Kept the owner\'s confirmation of the estimated figures: "{confirmed["owner_said"]}"'
         _render(store, args, out["invoice"], out)
         return _status_out(store, out, "invoice", _invoice_summary)
     if a == "show":
@@ -1375,9 +1387,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--external", action="append", help="key=value id in another system, e.g. xero=INV-88")
     p.add_argument("--allow-unconfirmed-tax", action="store_true")
     p.add_argument(
-        "--estimates-confirmed",
-        action="store_true",
-        help="The owner confirmed the lines that were estimates (issue)",
+        "--owner-confirmed",
+        metavar="WORDS",
+        help="Issue: the owner's own words confirming the estimated figures (kept on the invoice)",
     )
     p.add_argument("--dry-run", action="store_true", help="Preview it (previews/PREVIEW.pdf) without saving")
     p.add_argument("--as-spec", action="store_true")
@@ -1568,6 +1580,8 @@ def main(argv=None) -> None:
         payload = {"ok": False, "error": exc.message, "code": exc.code}
         if exc.hint:
             payload["hint"] = exc.hint
+        if getattr(exc, "ask_owner", None):
+            payload["ask_owner"] = exc.ask_owner
         _emit(payload, 1)
     except KeyboardInterrupt:
         _emit({"ok": False, "error": "Interrupted."}, 130)

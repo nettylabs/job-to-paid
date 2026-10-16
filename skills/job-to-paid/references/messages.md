@@ -126,6 +126,16 @@ attached. {refund, new balance, or "Nothing more to pay."} {owner name}
 > Hi {first name}, your {title} is due for its {interval} service around {service due}. Want me to
 > book you in? Reply with a day that suits.
 
+## When a customer asks about a cent of tax
+
+Tax is worked out line by line and rounded, the way most invoicing apps do it. That's what keeps the
+invoice exactly equal to the quote plus approved changes, but it can make the tax a cent different from
+the subtotal times the rate.
+
+> Good question! Tax is worked out on each line and rounded to the cent, so the total can be a cent
+> different from working it out on the subtotal. It's the same tax, just rounded line by line, and it's
+> why your invoice matches the quote you approved exactly.
+
 ## Unsent documents
 
 `send_quote` and `send_invoice` actions mean something was created but never sent. Ask the owner:

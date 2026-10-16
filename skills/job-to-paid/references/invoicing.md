@@ -16,8 +16,10 @@ orders comes to exactly what the customer agreed to, and the last progress invoi
 left, tax included. Never adjust totals by hand.
 
 **Estimates:** lines that were estimates on the quote stay marked "(estimate)" on the draft, and
-`invoice issue` refuses until the owner confirms them. Ask for the real figure; if it changed, fix the
-line with `invoice update`; then issue with `--estimates-confirmed`.
+`invoice issue` refuses until the owner confirms them, returning the exact question to ask (`ask_owner`).
+Ask it and wait. If a figure changed, fix the line with `invoice update`. If the owner says the figures
+are right, issue with `--owner-confirmed "<their exact words>"`: their reply is kept on the invoice and
+in the activity log, so the owner can always see who confirmed what. Never confirm on their behalf.
 
 **Deposits, the simple way:** if the customer pays a deposit, record it on the job
 (`jtp payment record --job J-0004 --deposit --amount 500 ...`). It comes off the next invoice

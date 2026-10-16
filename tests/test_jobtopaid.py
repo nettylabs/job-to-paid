@@ -516,7 +516,8 @@ class WorkflowTests(StoreCase):
             customer_id=self.cust["id"],
         )
         self.assertTrue(any(old["id"] in w for w in created["warnings"]))
-        docs.quote_accept(self.store, created["quote"]["id"], None, "Jane", "email", None)
+        accepted = docs.quote_accept(self.store, created["quote"]["id"], None, "Jane", "email", None)
+        self.assertEqual([o["id"] for o in accepted["other_open_quotes"]], [old["id"]])
         os.environ["JTP_TODAY"] = "2026-10-20"
         nudge = next(a for a in followups.due_actions(self.store) if a.get("doc") == old["id"])
         self.assertIn(f"jtp quote supersede {old['id']} --with {created['quote']['id']}", nudge["heads_up"])
@@ -535,11 +536,17 @@ class WorkflowTests(StoreCase):
         job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
         created = docs.invoice_create(self.store, job_id=job_id)
         self.assertEqual(created["estimates"], ["Install"])
+        inv_id = created["invoice"]["id"]
         with self.assertRaises(JTPError) as caught:
-            docs.invoice_issue(self.store, created["invoice"]["id"])
+            docs.invoice_issue(self.store, inv_id)
         self.assertEqual(caught.exception.code, "estimates_unconfirmed")
-        issued = docs.invoice_issue(self.store, created["invoice"]["id"], estimates_confirmed=True)["invoice"]
+        self.assertIn("Install: 3 hr at $95.00 = $285.00", caught.exception.ask_owner)  # the question for the owner
+        for not_an_answer in ("", " ", "<their exact words>"):
+            with self.assertRaises(JTPError):
+                docs.invoice_issue(self.store, inv_id, owner_confirmed=not_an_answer)
+        issued = docs.invoice_issue(self.store, inv_id, owner_confirmed="Yes, 3 hours is right")["invoice"]
         self.assertFalse([ln for ln in issued["lines"] if ln.get("estimate")])
+        self.assertEqual(issued["estimates_confirmed"]["owner_said"], "Yes, 3 hours is right")
 
     def test_deposits_count_as_received(self):
         quote = self._fixed_quote([{"kind": "fee", "description": "Work", "unit_price": "1000"}])
@@ -611,6 +618,28 @@ class WorkflowTests(StoreCase):
         early = next(a for a in followups.due_actions(self.store) if a["action"] == "payment_reminder")
         self.assertEqual(early["days_until_due"], 2)
         self.assertNotIn("days_overdue", early)
+
+    def test_typical_invoice_fits_on_one_page(self):
+        lines = [{"kind": "material", "description": f"Part {n}", "unit_price": "100"} for n in range(4)]
+        quote = self._fixed_quote(lines)
+        job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+        co = docs.co_create(
+            self.store,
+            job_id,
+            {
+                "title": "Valve",
+                "lines": [
+                    {"kind": "material", "description": "Valve", "unit_price": "30"},
+                    {"kind": "labour", "description": "Fit valve", "qty": 0.75},
+                ],
+            },
+        )["change_order"]
+        docs.co_approve(self.store, co["id"], "Jane", "text message", None)
+        docs.payment_record(self.store, job_id=job_id, amount="100", method="Bank", deposit=True)
+        inv = docs.invoice_create(self.store, job_id=job_id)["invoice"]
+        docs.invoice_issue(self.store, inv["id"])
+        pdf = Path(render_doc(self.store, self.store.doc(inv["id"]), engine="builtin")["files"]["pdf"]).read_bytes()
+        self.assertEqual(pdf.count(b"/Type /Page "), 1)
 
     def test_reminder_ladder(self):
         inv = docs.invoice_create(

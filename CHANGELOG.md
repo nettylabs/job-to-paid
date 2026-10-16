@@ -10,7 +10,8 @@ First release.
 - Change orders with recorded customer approval, billed automatically once approved.
 - Invoices from accepted quotes, progress and deposit invoices, time and materials, or quick one-offs. Tax is
   worked out line by line, so invoices add up to exactly what the customer agreed to, to the cent.
-- Estimated figures are labelled on quotes and must be confirmed by the owner before an invoice is issued.
+- Estimated figures are labelled on quotes, and an invoice won't issue until the owner confirms them; the
+  owner's own words are kept on the invoice.
 - Payments and deposits (by amount or as a percent of the accepted quote), held deposits applied automatically,
   receipts, credit notes and voids with gap-free numbering.
 - Follow-ups: quote check-ins, a five-stage payment reminder ladder, review requests, service reminders.
@@ -22,5 +23,5 @@ First release.
 - Any currency (0, 2 or 3 decimals), with the currency code beside totals where a symbol like $ is shared, any
   taxes (exclusive, inclusive or compound), any date format, letter or A4, and translatable document wording. Payment instructions can name the quote or invoice number.
 - Built-in PDF engine with no dependencies, plus HTML output and an optional local browser engine for any language.
-- Standard library Python 3.9+, local files only, no network calls, 47 automated tests and a built-in self-test. The demo business looks local
+- Standard library Python 3.9+, local files only, no network calls, 48 automated tests and a built-in self-test. The demo business looks local
   in USD, CAD (BC GST + PST), GBP (VAT) and AUD (GST).

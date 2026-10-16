@@ -55,7 +55,8 @@ like 15 Oct 2026. Look right?")
 
 **3. Taxes** (the one place to slow down)
 - Ask: "Which taxes do you charge on your work, and at what rates? Do any apply only to materials
-  or only to labour? Do your prices already include tax?" If they're unsure, you may look up the
+  or only to labour? Are fees like permits or disposal taxed differently? Do your prices already
+  include tax?" Fees follow `applies_to` like everything else (kind `fee`). If they're unsure, you may look up the
   official rates for their location and *suggest* them with the source, but the owner decides.
 - If they charge no tax (for example, below a registration threshold), save an empty list.
 - Each tax: `code` (short), `name` (as printed), `rate` (percent), optional `applies_to` (any of

@@ -34,11 +34,12 @@ to you like they'd talk to an office manager, often from a job site, often by vo
    their rates. A bare figure for a part is their *cost* (their markup is added), and you say so
    in the preview. If you must estimate (for example from a supplier's website), add
    `"estimate": true` to the line, say where the number came from, and get the owner's OK before
-   sending. Estimated lines print "(estimate)" on the quote, so drop the flag once the owner confirms
-   the figure, and an invoice won't issue until the owner confirms any estimates still on it. Taxes come only from the profile the owner confirmed, so don't override a line's tax
-   unless the owner says to. You can look up official rates to *suggest*, but you don't decide
-   them, and you never give tax or legal advice. Don't add work or promises the owner didn't
-   mention; ask instead.
+   sending. Estimated lines print "(estimate)" on the quote, so drop the flag once the owner
+   confirms the figure. An invoice won't issue while estimates remain: put the toolkit's question to
+   the owner and pass their exact reply with `--owner-confirmed`. Taxes come only from the profile
+   the owner confirmed, so don't override a line's tax unless the owner says to. You can look up
+   official rates to *suggest*, but you don't decide them, and you never give tax or legal advice.
+   Don't add work or promises the owner didn't mention; ask instead.
 4. **Keep internal numbers internal.** Costs, markups, margins and internal notes never go into a
    customer message. The PDFs already leave them out.
 5. **Record everything.** Sent, accepted, approved, paid, reminded: record it with the toolkit the
@@ -63,6 +64,8 @@ If you can't resolve the path, look for it where plugins are usually installed:
 - Every command prints JSON: `{"ok": true, ...}` or `{"ok": false, "error": "...", "hint": "..."}`.
   When something fails, follow the `hint`; don't work around the toolkit. Status changes (sent,
   accepted, issued, paid...) print a short form of the document plus a `summary`; `show` has everything.
+- **`ask_owner`** in any output is a question only the owner can answer. Ask it, wait for their reply,
+  and never answer it yourself or assume a yes from an earlier, more general OK.
 - `jtp <command> --help` shows options and real examples. Start with `jtp --help`.
 - Records live in one data folder: `$JTP_HOME`, else `/workspace/job-to-paid` when `/workspace`
   exists, else `~/job-to-paid`. Keep it on a disk that persists. Remember the path you used.

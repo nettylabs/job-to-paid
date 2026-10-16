@@ -15,7 +15,17 @@ from collections import OrderedDict, defaultdict
 from decimal import Decimal
 
 from . import profile as profile_mod
-from .money import HUNDRED, PRICED_KINDS, ZERO, allocate, compute_totals, format_qty, line_tax_breakdown, q
+from .money import (
+    HUNDRED,
+    PRICED_KINDS,
+    ZERO,
+    allocate,
+    compute_totals,
+    format_money,
+    format_qty,
+    line_tax_breakdown,
+    q,
+)
 from .pricing import lines_as_spec, normalize_lines
 from .records import job_create
 from .util import JTPError, dec_str, from_iso, iso, now_stamp, parse_date, to_decimal, trim_decimal
@@ -392,6 +402,11 @@ def quote_accept(
         if other and other["status"] in OPEN_QUOTE:
             _supersede(store, other, doc["id"], day)
             replaced.append(other["id"])
+    elsewhere = [
+        d
+        for d in store.docs("quote")
+        if d["customer_id"] == doc["customer_id"] and d["job_id"] != job["id"] and d["status"] in OPEN_QUOTE
+    ]
     job["pricing"] = "fixed"
     job["accepted_quote"] = doc["id"]
     job["accepted_option"] = option
@@ -406,6 +421,9 @@ def quote_accept(
         "accepted_total": chosen["totals"]["total"],
         "deposit_due": chosen.get("deposit_due"),
         "replaced_quotes": replaced,
+        "other_open_quotes": [
+            {"id": d["id"], "title": d["title"], "job": d["job_id"], "status": d["status"]} for d in elsewhere
+        ],
         "warnings": warnings,
     }
 
@@ -1065,8 +1083,17 @@ def _update_job_after_money(store, job: dict) -> None:
         job["status"] = "invoiced"
 
 
+def _estimate_figure(ln: dict, disp: dict) -> str:
+    amount = format_money(to_decimal(ln["amount"]), disp)
+    if not ln.get("display_qty", True):
+        return f"{ln.get('description') or ln['id']}: {amount}"
+    qty = f"{format_qty(to_decimal(ln['qty']), disp)} {ln.get('unit') or ''}".strip()
+    price = format_money(to_decimal(ln["unit_price"]), disp, extra_places=2)
+    return f"{ln.get('description') or ln['id']}: {qty} at {price} = {amount}"
+
+
 def invoice_issue(
-    store, ident: str, date=None, due_days=None, due_date=None, allow_unconfirmed_tax=False, estimates_confirmed=False
+    store, ident: str, date=None, due_days=None, due_date=None, allow_unconfirmed_tax=False, owner_confirmed=None
 ) -> dict:
     inv = store.doc(ident, "invoice")
     if inv["status"] != "draft":
@@ -1087,21 +1114,31 @@ def invoice_issue(
             code="setup_needed",
         )
     estimated = [ln for ln in inv["lines"] if ln.get("estimate")]
-    if estimated and not estimates_confirmed:
-        names = "; ".join(ln.get("description") or ln["id"] for ln in estimated)
+    said = (owner_confirmed or "").strip()
+    if estimated and (len(said) < 2 or "<" in said or ">" in said):
+        disp = store.money()
+        figures = "; ".join(_estimate_figure(ln, disp) for ln in estimated)
         raise JTPError(
-            f"{inv['id']} still has estimated figures ({names}). Issuing makes the invoice final, so the owner "
-            "confirms them first.",
-            hint=f"If they're right: jtp invoice issue {inv['id']} --estimates-confirmed   If not: jtp invoice show "
-            f'{inv["id"]} --as-spec > inv.json, fix the line and remove "estimate", then jtp invoice update '
-            f"{inv['id']} --spec inv.json",
+            f"{inv['id']} still has estimated figures. Issuing makes the invoice final, so only the owner can "
+            "confirm them: ask, and wait for their answer.",
+            hint=f'If the owner says yes: jtp invoice issue {inv["id"]} --owner-confirmed "<their exact words>" '
+            f"(kept on the invoice). If a figure changed: jtp invoice show {inv['id']} --as-spec > inv.json, fix "
+            f'the line and remove "estimate", then jtp invoice update {inv["id"]} --spec inv.json',
             code="estimates_unconfirmed",
+            ask_owner=f"Before I finalize invoice {inv['id']}: these figures were estimates. Are they final? {figures}",
         )
     day = parse_date(date or "today", store.today())
+    if estimated:
+        inv["estimates_confirmed"] = {
+            "date": iso(day),
+            "owner_said": said,
+            "lines": [
+                {"id": ln["id"], "description": ln.get("description", ""), "amount": ln["amount"]} for ln in estimated
+            ],
+        }
+        store.log("invoice.estimates_confirmed", inv["id"], owner_said=said)
     for ln in estimated:
         ln.pop("estimate", None)  # confirmed by the owner: the issued invoice shows firm figures
-    if estimated:
-        inv["estimates_confirmed"] = iso(day)
     if due_date:
         due = parse_date(due_date, store.today())
     else:

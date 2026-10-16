@@ -981,9 +981,9 @@ class Layout:
             )
             self.c.text(self.right - width / 2, right_y + 13.6, text, "F2", 11, green, "center")
             right_y += 19
-        self.y = max(left_y, right_y) + 16
+        self.y = max(left_y, right_y) + 14
         self.c.line(self.margin, self.y, self.right, self.y, RULE, 0.8)
-        self.y += 18
+        self.y += 16
 
     def parties(self):
         v = self.view
@@ -1066,7 +1066,7 @@ class Layout:
             )
         for row in section["rows"]:
             font = "F3" if row["style"] == "text" else "F1"
-            height += 12.5 * len(wrap(row["desc"], font, 9.6, self.cols["desc_w"] - 6)) + 9
+            height += 12.5 * len(wrap(row["desc"], font, 9.6, self.cols["desc_w"] - 6)) + 7.5
         if section.get("totals"):
             height += 20 * len(section["totals"]) + 30
         return height + 6
@@ -1104,10 +1104,10 @@ class Layout:
             font = "F3" if row["style"] == "text" else "F1"
             color = MUTED if row["style"] == "text" else INK
             parts = wrap(row["desc"], font, 9.6, self.cols["desc_w"] - 6)
-            height = 12.5 * len(parts) + 9
+            height = 12.5 * len(parts) + 7.5
             if self.need(height):
                 self.table_header()
-            top = self.y + 11
+            top = self.y + 10.2
             for i, part in enumerate(parts):
                 self.c.text(self.cols["desc"] + 6, top + i * 12.5, part, font, 9.6, color)
             if row["qty"]:
@@ -1133,7 +1133,7 @@ class Layout:
             if strong:
                 self.c.line(x_label, self.y + 6, self.right, self.y + 6, (0.75, 0.76, 0.79), 0.8)
                 self.y += 8
-            self.y += 16 if strong else 14
+            self.y += 16 if strong else 13
             font = "F2" if strong else "F1"
             size = 11 if strong else 9.6
             color = MUTED if row.get("muted") else INK
@@ -1145,7 +1145,7 @@ class Layout:
             self.c.text(x_label + 10, self.y + 17, balance["label"], "F2", 11, INK)
             self.c.text(self.right - 10, self.y + 17, balance["value"], "F2", 12.5, INK, "right")
             self.y += 26
-        self.y += 14
+        self.y += 10
 
     def boxed(self, heading, lines, link=None, link_label=""):
         wrapped = []
@@ -1168,7 +1168,7 @@ class Layout:
             self.c.link(self.margin + 12, y, w, 20, link)
             shown = link if len(link) <= 70 else link[:67] + "..."
             self.c.text(self.margin + 20 + w, y + 13.5, shown, "F1", 8.2, MUTED)
-        self.y += height + 14
+        self.y += height + 12
 
     def acceptance(self, block):
         lines = [block["text"]] if block.get("text") else []
