@@ -772,10 +772,11 @@ class WorkflowTests(StoreCase):
             line.pop("estimate", None)
         again = docs.invoice_create(self.store, customer_id=self.cust["id"], spec={"title": "C", "lines": copy_lines})
         self.assertEqual(again["invoice"]["id"], draft["id"])  # the same number, released by the delete
-        self.assertIn("Call-out: the same figure as an estimate for Jane Doe", " ".join(again["warnings"]))
+        self.assertIn("Call-out: matches an estimate for Jane Doe that the owner hasn't confirmed (on a deleted draft)",
+                      " ".join(again["warnings"]))  # fmt: skip
         question = self._asked(again["invoice"]["id"]).ask_owner
-        self.assertEqual(question, f"Before I finalize invoice {draft['id']}: these figures match estimates on a "
-                         "deleted draft for Jane Doe that you haven't confirmed. Are they final? Call-out: 1 ea at "
+        self.assertEqual(question, f"Before I finalize invoice {draft['id']}: these lines match estimates for Jane Doe "
+                         "that you haven't confirmed (on a deleted draft). Are these figures final? Call-out: 1 ea at "
                          "$89.00 = $89.00 CAD")  # only the remembered line is named, not Work  # fmt: skip
         self._issue_with_the_owners_yes(again["invoice"]["id"])
         self.assertNotIn("unconfirmed_estimates", self.store.customer(self.cust["id"]))  # confirmed: forgotten
@@ -784,7 +785,7 @@ class WorkflowTests(StoreCase):
         voided = owner_approves(docs.invoice_void, self.store, draft["id"], "Wrong job")
         self.assertIn("never confirmed", voided["warnings"][0])
         copy = self._stripped_copy(draft)["invoice"]["id"]
-        self.assertIn(f"on voided draft {draft['id']} for Jane Doe", self._asked(copy).ask_owner)
+        self.assertIn(f"(on voided draft {draft['id']})", self._asked(copy).ask_owner)
 
     def _customer(self, name):
         email = name.lower().replace(" ", ".") + "@x.example"
@@ -807,9 +808,9 @@ class WorkflowTests(StoreCase):
                 a = self._draft_for(customer, dict(call_out, estimate=True), repair)
                 self.assertEqual(docs.invoice_update(self.store, a, {"lines": kept})["warnings"], [])
                 b = docs.invoice_create(self.store, customer_id=customer, spec={"lines": [call_out]})
-                self.assertIn(f"Call-out: the same figure as an estimate for Moved {route} that the owner hasn't "
-                              f"confirmed (draft {a})", " ".join(b["warnings"]))  # fmt: skip
-                self.assertIn(f"these figures match estimates on draft {a}", self._asked(b["invoice"]["id"]).ask_owner)
+                self.assertIn(f"Call-out: matches an estimate for Moved {route} that the owner hasn't confirmed "
+                              f"(taken off draft {a})", " ".join(b["warnings"]))  # fmt: skip
+                self.assertIn(f"(taken off draft {a})", self._asked(b["invoice"]["id"]).ask_owner)
                 self.assertTrue(self._asked(a).ask_owner.startswith(
                     f"Before I finalize invoice {a}: Call-out: 1 ea at $89.00 = $89.00 CAD was an estimate, since "
                     "changed or taken off it. Are these figures final? Repair: 2 hr"))  # the right line, named
@@ -818,7 +819,7 @@ class WorkflowTests(StoreCase):
                 owner_approves(docs.invoice_void, self.store, a, "Wrong job")
                 remembered = self.store.customer(customer)["unconfirmed_estimates"][0]["lines"]
                 self.assertEqual([(i["key"], i["amount"]) for i in remembered], [("call out", "89")])
-                self.assertIn(f"on voided draft {a}", self._asked(b["invoice"]["id"]).ask_owner)
+                self.assertIn(f"(on voided draft {a})", self._asked(b["invoice"]["id"]).ask_owner)
 
     def test_an_estimate_taken_off_an_issued_invoice_still_counts(self):
         """Taking an estimate off a draft and issuing it leaves the estimate unconfirmed, so the same figure on
@@ -833,7 +834,7 @@ class WorkflowTests(StoreCase):
         self.assertEqual(docs.invoice_issue(self.store, self._draft_for(customer, labour))["invoice"]["status"],
                          "issued")  # Labour was never an estimate: not asked  # fmt: skip
         copy = self._draft_for(customer, call_out)
-        self.assertIn(f"on invoice {a}, before it was changed", self._asked(copy).ask_owner)
+        self.assertIn(f"(taken off invoice {a} before it was issued)", self._asked(copy).ask_owner)
 
     def test_an_open_estimate_only_matches_its_own_figure_and_a_yes_sticks(self):
         """An independent review of 1.0.2: while an estimated "Labour 4 hr" draft was open, every "Labour 1 hr"
@@ -859,15 +860,59 @@ class WorkflowTests(StoreCase):
         retyped = [{"kind": "material", "description": "Heater", "qty": 1, "unit_price": "1125"},
                    {"kind": "labour", "description": "Install", "qty": 3}]  # fmt: skip
         on_job = docs.invoice_create(self.store, job_id=job_id, spec={"lines": retyped})
-        self.assertIn(f"(quote {quote['id']})", " ".join(on_job["warnings"]))
+        self.assertIn(f"(on quote {quote['id']})", " ".join(on_job["warnings"]))
         question = self._asked(on_job["invoice"]["id"]).ask_owner
-        self.assertIn(f"these figures match estimates on quote {quote['id']} for Jane Doe", question)
+        self.assertIn(f"these lines match estimates for Jane Doe that you haven't confirmed (on quote {quote['id']})",
+                      question)  # fmt: skip
         self.assertIn("Heater: 1 ea at $1,125.00", question)
         self.assertNotIn("Install", question)  # not an estimate on the quote
         for_customer = self._draft_for(self.cust["id"], *retyped)
         self._issue_with_the_owners_yes(for_customer)
         again = self._draft_for(self.cust["id"], *retyped)  # the owner confirmed that figure: it sticks
         self.assertEqual(docs.invoice_issue(self.store, again)["invoice"]["status"], "issued")
+
+    def test_an_estimate_that_left_its_invoice_matches_at_any_amount(self):
+        """An independent review of 1.0.2: an estimate taken off a draft (or deleted with it), retyped at $89.01,
+        split into $50 + $39 or merged into a bigger line, issued unasked. An open estimate still needs the same
+        figure."""
+        customer = self._customer("Any Amount")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        repair = {"kind": "labour", "description": "Repair", "qty": 2}
+        a = self._draft_for(customer, dict(call_out, estimate=True), repair)
+        docs.invoice_update(self.store, a, {"lines": [repair]})  # the estimate taken off A
+        question = self._asked(self._draft_for(customer, dict(call_out, unit_price="89.01"))).ask_owner
+        self.assertIn(f"(Call-out: 1 ea at $89.00 = $89.00 CAD, taken off draft {a})", question)  # the estimate shown
+        merged = {"kind": "fee", "description": "Repair and call-out", "unit_price": "279"}
+        self._asked(self._draft_for(customer, merged))
+        self._issue_with_the_owners_yes(self._draft_for(customer, dict(call_out, unit_price="50")))
+        part = {"kind": "fee", "description": "Call-out part 2", "unit_price": "39"}
+        self._issue_with_the_owners_yes(self._draft_for(customer, part))  # $50 alone didn't cover the $89
+        later = self._draft_for(customer, dict(call_out, unit_price="20"))  # $50 + $39: now covered
+        self.assertEqual(docs.invoice_issue(self.store, later)["invoice"]["status"], "issued")
+        other = self._customer("Deleted Any Amount")
+        draft = self._draft_for(other, dict(call_out, estimate=True))
+        docs.invoice_delete(self.store, draft)
+        for retyped in ("Callout", "Cаll-out", "call out!"):  # no space, a Cyrillic а, punctuation
+            with self.subTest(retyped=retyped):
+                copy = self._draft_for(other, dict(call_out, description=retyped, unit_price="95"))
+                question = self._asked(copy).ask_owner
+                self.assertIn("(Call-out: 1 ea at $89.00 = $89.00 CAD, on a deleted draft)", question)
+
+    def test_a_yes_only_covers_the_estimates_it_was_about(self):
+        """An independent review of 1.0.2: after a yes to a copy of "Call-out $89", a later, new estimate of the same
+        figure could be moved, deleted or retyped unasked, and that yes never expired."""
+        customer = self._customer("Scoped Yes")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        first = self._draft_for(customer, dict(call_out, estimate=True))
+        self._issue_with_the_owners_yes(self._draft_for(customer, call_out))  # a copy of the first estimate
+        repeat = self._draft_for(customer, call_out)
+        self.assertEqual(docs.invoice_issue(self.store, repeat)["invoice"]["status"], "issued")  # the yes covers it
+        second = self._draft_for(customer, dict(call_out, estimate=True))  # a new estimate, the same figure
+        self.assertIn(f"(on draft {second})", self._asked(self._draft_for(customer, call_out)).ask_owner)
+        docs.invoice_update(self.store, second, {"lines": [{"kind": "labour", "description": "Repair", "qty": 1}]})
+        self.assertIn("Call-out: 1 ea at $89.00 = $89.00 CAD was an estimate", self._asked(second).ask_owner)
+        os.environ["JTP_TODAY"] = "2026-11-20"  # more than 30 days on: the yes about the first has expired
+        self.assertIn(f"(on draft {first};", self._asked(self._draft_for(customer, call_out)).ask_owner)
 
     def test_a_yes_to_other_figures_doesnt_clear_remembered_estimates(self):
         """An independent review of 1.0.1: the question named only the new invoice's figures, so a yes to a $10
@@ -892,12 +937,13 @@ class WorkflowTests(StoreCase):
         older = self._open_draft()
         original = self._estimated_draft()
         copy = self._stripped_copy(original)
-        self.assertIn(f"({'draft ' + original['id']})", " ".join(copy["warnings"]))
+        self.assertIn(f"(on draft {original['id']})", " ".join(copy["warnings"]))
         spec = {"title": "Older", "lines": [{"kind": "fee", "description": "Call out", "unit_price": "89"}]}
         updated = docs.invoice_update(self.store, older, spec)  # copied into an older draft ("Call out": the same)
-        self.assertIn("the same figure as an estimate", " ".join(updated["warnings"]))
+        self.assertIn("matches an estimate", " ".join(updated["warnings"]))
         question = self._issue_with_the_owners_yes(copy["invoice"]["id"])
-        self.assertIn(f"these figures match estimates on draft {original['id']} for Jane Doe", question)
+        self.assertIn("these lines match estimates for Jane Doe that you haven't confirmed "
+                      f"(on draft {original['id']})", question)  # fmt: skip
         self.assertEqual(docs.invoice_issue(self.store, older)["invoice"]["status"], "issued")  # the yes sticks
         self._asked(original["id"])  # the original still asks for itself
 
@@ -910,7 +956,8 @@ class WorkflowTests(StoreCase):
         copy = docs.co_create(self.store, job_id, {"title": "Valve", "lines": [valve]})["change_order"]["id"]
         docs.co_approve(self.store, copy, "Jane", "text", None)
         inv = docs.invoice_create(self.store, job_id=job_id)["invoice"]["id"]  # bills the copy, not the sent one
-        self.assertIn(f"on change order {sent['change_order']['id']} for Jane Doe", self._asked(inv).ask_owner)
+        self.assertIn(f"these lines match estimates for Jane Doe that you haven't confirmed (on change order "
+                      f"{sent['change_order']['id']})", self._asked(inv).ask_owner)  # fmt: skip
 
     def test_a_voided_change_order_keeps_its_estimates(self):
         """An independent review of 1.0.1: co void dropped a change order's estimate, so the same work re-created
@@ -925,7 +972,7 @@ class WorkflowTests(StoreCase):
         docs.co_approve(self.store, again["id"], "Jane", "text", None)
         inv = docs.invoice_create(self.store, job_id=job_id)["invoice"]
         question = self._asked(inv["id"]).ask_owner
-        self.assertIn(f"on voided change order {co['change_order']['id']} for Jane Doe", question)
+        self.assertIn(f"(on voided change order {co['change_order']['id']})", question)
         self.assertIn("Extra valve", question)
         self.assertNotIn("Work", question)  # the quote's own line wasn't an estimate
 
@@ -962,6 +1009,15 @@ class WorkflowTests(StoreCase):
                 {"kind": "fee", "description": "Work", "unit_price": "1"}]})  # fmt: skip
         self.assertEqual(caught.exception.code, "setup_needed")
         self.assertNotIn("--dry-run", caught.exception.hint)
+
+    def test_renaming_a_customer_to_another_customers_name_gets_a_warning(self):
+        """An independent review of 1.0.2: the duplicate-name warning covered customer add only."""
+        sam = records.customer_add(self.store, {"name": "Sam Lee"})["customer"]
+        out = records.customer_update(self.store, sam["id"], {"name": "Jane  Doe"})
+        self.assertEqual(out["warnings"], [f"There's already a customer called Jane Doe: {self.cust['id']} "
+                                           f"(jane@example.com). If it's the same person, use {self.cust['id']} "
+                                           f"instead of {sam['id']}."])  # fmt: skip
+        self.assertNotIn("warnings", records.customer_update(self.store, sam["id"], {"phone": "555 0100"}))
 
     def test_a_second_customer_with_the_same_name_gets_a_warning(self):
         """An independent review of 1.0.1: adding "Jane Doe" again with a new email gave no warning."""
@@ -1368,9 +1424,27 @@ class DocsTests(unittest.TestCase):
         of its lines ran past the wrap width."""
         security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
         limit = " ".join(security.split("- **Known limit.**", 1)[1].split("\n- ", 1)[0].split())
-        self.assertIn("Figures copied to a different customer, or retyped at a different amount or under a different "
-                      "description, aren't recognised.", limit)  # fmt: skip
+        self.assertIn("Figures copied to a different customer, a copy of an open estimate retyped at a different "
+                      "amount, or a copy under a different description aren't recognised.", limit)  # fmt: skip
         self.assertEqual([n for n, line in enumerate(security.splitlines(), 1) if len(line) > 120], [])
+
+    def test_the_guide_says_what_asks_but_not_how_matching_works(self):
+        """An independent review of 1.0.2: invoicing.md spelled out the matching rule ("the same description and
+        amount", "isn't asked about again"), which reads as how to avoid the question. SECURITY.md keeps it."""
+        guide = " ".join((ROOT / "skills" / "job-to-paid" / "references" / "invoicing.md").read_text(
+            encoding="utf-8").split())  # fmt: skip
+        self.assertIn("A line that repeats an estimate the owner hasn't confirmed", guide)
+        for detail in ("description and amount", "same description", "isn't asked about again", "any amount"):
+            self.assertNotIn(detail, guide)
+        security = " ".join((ROOT / "SECURITY.md").read_text(encoding="utf-8").split())
+        self.assertIn("by the same description and amount", security)
+        self.assertIn("by its description at any amount", security)
+        self.assertIn("for 30 days", security)
+
+    def test_the_skill_says_to_keep_the_estimate_mark_when_changing_a_quantity(self):
+        """An independent review of 1.0.2: the likeliest honest slip is dropping the mark while changing a quantity."""
+        skill = " ".join((ROOT / "skills" / "job-to-paid" / "SKILL.md").read_text(encoding="utf-8").split())
+        self.assertIn("keep the estimate mark when you change a quantity or price", skill)
 
     def test_the_skill_never_searches_the_home_folder(self):
         skill = (ROOT / "skills" / "job-to-paid" / "SKILL.md").read_text(encoding="utf-8")
@@ -1495,6 +1569,14 @@ class CliTests(unittest.TestCase):
                 code, out = self.run_cli(home, *args, "--dry-run")
                 self.assertEqual((code, out["code"]), (1, "usage"), args)
             self.assertEqual(self.run_cli(home, "invoice", "show", inv)[1]["invoice"]["status"], "draft")
+
+    def test_customer_update_warns_about_a_name_another_customer_has(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo")
+            code, out = self.run_cli(home, "customer", "update", "C-0002", "--name", "Jane Doe")
+            self.assertEqual((code, out["customer"]["name"]), (0, "Jane Doe"))
+            self.assertIn("There's already a customer called Jane Doe: C-0001", out["warnings"][0])
 
     def test_issuing_again_says_so_and_a_no_isnt_success(self):
         with tempfile.TemporaryDirectory() as tmp:

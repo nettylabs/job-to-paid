@@ -347,6 +347,16 @@ def _with_owners_yes(action, *args, **kwargs):
         return action(*args, owner_confirmed="yes", confirm_code=exc.confirm, **kwargs)
 
 
+def _with_estimates_yes(action, *args, **kwargs):
+    """Issue an invoice that asks about its estimates, answering "yes" as the demo's owner."""
+    try:
+        return action(*args, **kwargs)
+    except JTPError as exc:
+        if exc.code != "estimates_unconfirmed":
+            raise
+        return action(*args, owner_confirmed="yes", confirm_code=exc.confirm, **kwargs)
+
+
 def _refusal(action, *args, **kwargs):
     """The code an action refuses with, or None if it went ahead."""
     try:
@@ -608,6 +618,27 @@ def selftest() -> dict:
             asked = _refusal(docs.invoice_issue, store, retyped["invoice"]["id"])
             check("an accepted quote's estimate retyped on an invoice asks the owner", asked == "estimates_unconfirmed",
                   asked)  # fmt: skip
+
+            # 1.0.3: an estimate that left its invoice matches at any amount; a yes covers only what it was about.
+            third = records.customer_add(store, {"name": "Selftest Three", "email": "three@x.example"})
+            third = third["customer"]["id"]
+            taken = docs.invoice_create(store, customer_id=third,
+                                        spec={"lines": [dict(call_out, estimate=True), repair]})  # fmt: skip
+            docs.invoice_update(store, taken["invoice"]["id"], {"lines": [repair]})
+            repriced = docs.invoice_create(store, customer_id=third,
+                                           spec={"lines": [dict(call_out, unit_price="89.01")]})  # fmt: skip
+            asked = _refusal(docs.invoice_issue, store, repriced["invoice"]["id"])
+            check("an estimate taken off a draft and retyped at another amount asks the owner",
+                  asked == "estimates_unconfirmed", asked)  # fmt: skip
+            fourth = records.customer_add(store, {"name": "Selftest Four", "email": "four@x.example"})["customer"]["id"]
+            docs.invoice_create(store, customer_id=fourth, spec={"lines": [dict(call_out, estimate=True)]})
+            copy = docs.invoice_create(store, customer_id=fourth, spec={"lines": [call_out]})["invoice"]["id"]
+            _with_estimates_yes(docs.invoice_issue, store, copy)  # the owner confirms that copy
+            docs.invoice_create(store, customer_id=fourth, spec={"lines": [dict(call_out, estimate=True)]})  # a new one
+            again = docs.invoice_create(store, customer_id=fourth, spec={"lines": [call_out]})["invoice"]["id"]
+            asked = _refusal(docs.invoice_issue, store, again)
+            check("a yes covers only the estimate it was about: a new estimate of the same figure asks again",
+                  asked == "estimates_unconfirmed", asked)  # fmt: skip
             bank = {"payment": {"methods": [{"name": "Bank", "instructions": "Account 99916045550100, ref 5550100."}]}}
             moved, _ = follow_contact(bank, "business.phone", "+1 604 555 0100", "+1 604 555 0199")
             check("a phone change leaves account numbers alone", not moved, bank["payment"]["methods"])

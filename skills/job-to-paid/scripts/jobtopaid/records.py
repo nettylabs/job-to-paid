@@ -95,19 +95,25 @@ def customer_add(store, data: dict) -> dict:
                 "note": f"{cust['name']} already exists as {cust['id']}; used that record.",
             }
     cust = {"id": store.next_id("customer"), **fields, "created_at": now_stamp()}
-    namesakes = [c for c in customers if _name_key(c.get("name")) == _name_key(cust["name"])]
+    warnings = _namesake_warnings(customers, cust)
     customers.append(cust)
     store.save_customers(customers)
     store.log("customer.add", cust["id"], name=cust["name"])
     out = {"customer": cust, "existing": False}
-    if namesakes:  # two customers can share a name, but a second record for the same person splits their history
-        out["warnings"] = [
-            f"There's already a customer called {c['name']}: {c['id']}"
-            + (f" ({c.get('email') or c.get('phone')})" if c.get("email") or c.get("phone") else "")
-            + f". If it's the same person, use {c['id']} instead of {cust['id']}."
-            for c in namesakes
-        ]
+    if warnings:
+        out["warnings"] = warnings
     return out
+
+
+def _namesake_warnings(customers: list, cust: dict) -> list:
+    """Two customers can share a name, but a second record for the same person splits their history."""
+    return [
+        f"There's already a customer called {c['name']}: {c['id']}"
+        + (f" ({c.get('email') or c.get('phone')})" if c.get("email") or c.get("phone") else "")
+        + f". If it's the same person, use {c['id']} instead of {cust['id']}."
+        for c in customers
+        if c["id"] != cust["id"] and _name_key(c.get("name")) == _name_key(cust.get("name"))
+    ]
 
 
 def _name_key(name) -> str:
@@ -125,7 +131,10 @@ def customer_update(store, ident: str, data: dict) -> dict:
             target = cust
     store.save_customers(customers)
     store.log("customer.update", target["id"], fields=sorted(fields))
-    return target
+    out = {"customer": target}
+    if "name" in fields and _namesake_warnings(customers, target):
+        out["warnings"] = _namesake_warnings(customers, target)
+    return out
 
 
 def customer_list(store, search: str | None = None) -> list:

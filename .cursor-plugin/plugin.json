@@ -1,7 +1,7 @@
 {
   "name": "job-to-paid",
   "displayName": "Job to Paid",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Quotes, change orders, invoices and payment follow-ups for trades and service businesses. Voice note to PDF quote with good/better/best options, deposits, progress billing, reminders you approve, and a morning money brief. Any country, currency or tax setup. Runs locally; no account needed.",
   "author": {
     "name": "Netty Labs"
