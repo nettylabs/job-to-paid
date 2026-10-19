@@ -9,6 +9,7 @@ import os
 import re
 import tempfile
 import time
+import unicodedata
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -216,3 +217,27 @@ def safe_id_part(text: str) -> str:
     """Keep document number prefixes filesystem-safe."""
     cleaned = re.sub(r"[^A-Za-z0-9_-]", "", text or "")
     return cleaned
+
+
+# Letters from other scripts, and a few Latin ones, that look like plain Latin letters. Folded to them when
+# comparing what people type (line descriptions, customer names), so a lookalike can't make a copy look new.
+LOOKALIKE_LETTERS = str.maketrans({
+    # Cyrillic
+    "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o", "р": "p", "с": "c", "т": "t", "у": "y",
+    "х": "x", "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "һ": "h", "ӏ": "l", "ԛ": "q", "ԝ": "w",
+    # Greek
+    "α": "a", "β": "b", "ε": "e", "η": "n", "ι": "i", "κ": "k", "μ": "m", "ν": "v", "ο": "o", "ρ": "p", "τ": "t",
+    "υ": "u", "χ": "x",
+    # Armenian
+    "օ": "o", "ս": "u", "հ": "h", "ո": "n", "ց": "g", "զ": "q",
+    # Latin letters that look like others
+    "ɑ": "a", "ɡ": "g", "ı": "i", "ȷ": "j", "ɩ": "i", "ʋ": "u", "ᴄ": "c", "ᴏ": "o", "ᴜ": "u", "ᴠ": "v", "ᴡ": "w",
+    "ᴢ": "z",
+})
+
+
+def fold_letters(text) -> str:
+    """Text folded for comparing what people type: accents dropped, case and lookalike letters ignored ("Jane Doé"
+    and "Jаne Doe" with a Cyrillic а are both "jane doe")."""
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(ch for ch in text if not unicodedata.combining(ch)).casefold().translate(LOOKALIKE_LETTERS)

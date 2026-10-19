@@ -172,13 +172,14 @@ Examples:
 usage: jtp customer [-h] [--name NAME] [--company COMPANY] [--email EMAIL] [--phone PHONE]
                     [--address ADDRESS] [--notes NOTES] [--language LANGUAGE] [--whatsapp WHATSAPP]
                     [--tax-id TAX_ID] [--site SITE] [--search SEARCH]
-                    [--preferred {email,sms,whatsapp,phone,other}]
-                    {add,list,show,update} [id]
+                    [--preferred {email,sms,whatsapp,phone,other}] [--owner-confirmed WORDS]
+                    [--confirm CODE]
+                    {add,list,show,update,forget-estimates} [id]
 
 Add, find, show or update customers.
 
 positional arguments:
-  {add,list,show,update}
+  {add,list,show,update,forget-estimates}
   id
 
 options:
@@ -195,12 +196,16 @@ options:
   --site SITE           Job site address if different
   --search SEARCH       Words to match
   --preferred {email,sms,whatsapp,phone,other}
+  --owner-confirmed WORDS
+                        forget-estimates: the owner's own words; only a plain yes counts
+  --confirm CODE        forget-estimates: the code that came with the owner's question
 
 Examples:
   jtp customer add --name "Jane Doe" --phone "+1 604 555 0142" --email jane@example.com --address "12 Maple Ave; Surrey BC V3S 1A1"
   jtp customer list --search jane
   jtp customer show C-0001
   jtp customer update C-0001 --preferred whatsapp
+  jtp customer forget-estimates C-0001   (asks the owner first: returns the question and its code)
 ```
 
 ## pricebook

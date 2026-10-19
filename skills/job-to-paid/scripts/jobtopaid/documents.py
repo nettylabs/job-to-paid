@@ -15,7 +15,6 @@ import hashlib
 import json
 import re
 import secrets
-import unicodedata
 from collections import OrderedDict, defaultdict
 from decimal import Decimal
 
@@ -35,7 +34,7 @@ from .money import (
 )
 from .pricing import lines_as_spec, normalize_lines
 from .records import job_create
-from .util import JTPError, dec_str, from_iso, iso, now_stamp, parse_date, to_decimal, trim_decimal
+from .util import JTPError, dec_str, fold_letters, from_iso, iso, now_stamp, parse_date, to_decimal, trim_decimal
 
 QUOTE_STATUSES = ("draft", "sent", "accepted", "declined", "expired", "superseded", "void")
 OPEN_QUOTE = ("draft", "sent", "expired")
@@ -1084,7 +1083,7 @@ def invoice_update(store, ident: str, spec: dict) -> dict:
         for item in before:
             kept_off = {(t["key"].replace(" ", ""), t["amount"]) for t in taken_off}
             if (item["key"].replace(" ", ""), item["amount"]) not in now | kept_off:
-                taken_off.append(item)
+                taken_off.append(dict(item, date=iso(store.today())))
         taken_off = [t for t in taken_off if (t["key"].replace(" ", ""), t["amount"]) not in now]
         if taken_off:
             inv["removed_estimates"] = taken_off
@@ -1116,19 +1115,18 @@ def _line_key(line: dict) -> str:
 
 
 def _key_of(description) -> str:
-    """A description folded for matching: case, spacing, punctuation, accents and lookalike letters ignored
-    ("Call-out", "CALL OUT" and "Cаll-out" with a Cyrillic а are all "call out")."""
-    text = unicodedata.normalize("NFKD", str(description or ""))
-    text = "".join(ch for ch in text if not unicodedata.combining(ch)).casefold().translate(_LOOKALIKES)
-    return " ".join(re.sub(r"[\W_]+", " ", text).split())
+    """A description folded for matching: case, spacing, punctuation, accents, lookalike letters (also a 0 or 1 in a
+    word, for o and l) and a plural s ignored ("Call-outs", "CALL OUT" and "Cаll-0ut" are all "call out")."""
+    return " ".join(_key_word(word) for word in re.sub(r"[\W_]+", " ", fold_letters(description)).split())
 
 
-# Cyrillic and Greek letters that look like Latin ones, folded to them for matching descriptions.
-_LOOKALIKES = str.maketrans({
-    "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o", "р": "p", "с": "c", "т": "t", "у": "y",
-    "х": "x", "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "һ": "h", "ӏ": "l", "ԛ": "q", "ԝ": "w", "α": "a", "β": "b",
-    "ε": "e", "η": "n", "ι": "i", "κ": "k", "μ": "m", "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u", "χ": "x",
-})
+def _key_word(word: str) -> str:
+    if any(ch.isalpha() for ch in word):
+        word = word.translate(_DIGIT_LETTERS)  # "0ut", not "10"
+    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word  # "parts", "glass"
+
+
+_DIGIT_LETTERS = str.maketrans({"0": "o", "1": "l"})
 
 
 def invoice_state(inv: dict, day: _dt.date) -> dict:
@@ -1200,12 +1198,29 @@ def _same_line(a: str, b: str) -> bool:
 
 
 def _related_line(a: str, b: str) -> bool:
-    """For an estimate that left its invoice: the same description, or one inside the other as whole words ("Call-out
-    part 1", "Repair and call-out")."""
+    """For an estimate that left its invoice: the same description, or one inside the other as whole words, spaces
+    aside ("Call-out part 1", "Repair and call-out", "Callout fee")."""
     if _same_line(a, b):
         return True
-    shorter, longer = sorted((a, b), key=len)
-    return len(shorter.replace(" ", "")) >= 3 and f" {shorter} " in f" {longer} "
+    shorter, longer = sorted((a, b), key=lambda key: len(key.replace(" ", "")))
+    target, words = shorter.replace(" ", ""), longer.split()
+    return len(target) >= 3 and any("".join(words[i:j]) == target
+                                    for i in range(len(words)) for j in range(i + 1, len(words) + 1))  # fmt: skip
+
+
+REMEMBER_DAYS = 30  # how long an estimate that left its invoice (taken off, deleted, voided) is checked against
+
+
+def _recent(store, item: dict) -> bool:
+    """An estimate that left its invoice is checked against for REMEMBER_DAYS from when it left."""
+    return str(item.get("date") or "") >= iso(store.today() - _dt.timedelta(days=REMEMBER_DAYS))
+
+
+def _taken_off(store, inv: dict) -> list:
+    """The estimates changed or taken off a draft (invoice_update), each with the day it happened. Records from
+    before that was kept get the draft's own day."""
+    since = (inv.get("created_at") or "")[:10] or iso(store.today())
+    return [dict(t, date=t.get("date") or since) for t in inv.get("removed_estimates") or []]
 
 
 def _estimate_items(store, lines: list) -> list:
@@ -1216,14 +1231,19 @@ def _estimate_items(store, lines: list) -> list:
 
 def _draft_sources(store, inv: dict) -> list:
     """A draft invoice's estimates the owner hasn't confirmed, as (items, source id, where, exact): its marked lines,
-    matched at the same figure, and the estimates changed or taken off it since (removed_estimates, kept by
-    invoice_update), matched by description at any amount."""
+    matched at the same figure; estimates re-priced on it since, at their old figure; and estimates taken off it
+    (removed_estimates, kept by invoice_update), by description at any amount, for REMEMBER_DAYS."""
     if inv.get("estimates_confirmed"):
         return []
     marked = _estimate_items(store, [ln for ln in inv["lines"] if ln.get("estimate")])
+    present = [_line_key(ln) for ln in priced(inv["lines"])]
+    taken = [t for t in _taken_off(store, inv) if _recent(store, t)]
+    repriced = [t for t in taken if any(_same_line(t["key"], key) for key in present)]  # still there, re-priced
+    removed = [t for t in taken if t not in repriced]
+    source = f"invoice:{inv['id']}:taken"
     return [(marked, f"invoice:{inv['id']}", f"on draft {inv['id']}", True),
-            (list(inv.get("removed_estimates") or []), f"invoice:{inv['id']}:taken", f"taken off draft {inv['id']}",
-             False)]  # fmt: skip
+            (repriced, source, f"changed on draft {inv['id']}", True),
+            (removed, source, f"taken off draft {inv['id']}", False)]  # fmt: skip
 
 
 def _customer_field(store, customer_id, field: str) -> list:
@@ -1261,9 +1281,11 @@ def _entry_lines(entry: dict) -> list:
     """A remembered entry's estimates, as {"key", "amount", "figure"}. 1.0.1 kept only the figures' text ("Call-out: 1
     ea at $89.00 = $89.00 CAD; ..."): those are read back by description, with any amount (None)."""
     if entry.get("lines"):
-        return [dict(item, key=_key_of(item["key"]), amount=item.get("amount")) for item in entry["lines"]]
+        return [dict(item, key=_key_of(item["key"]), amount=item.get("amount"),
+                     date=item.get("date") or entry.get("date")) for item in entry["lines"]]  # fmt: skip
     figures = [f for f in str(entry.get("figures") or "").split("; ") if f]
-    return [{"key": _key_of(f.split(": ", 1)[0]), "amount": None, "figure": f} for f in figures]
+    return [{"key": _key_of(f.split(": ", 1)[0]), "amount": None, "figure": f, "date": entry.get("date")}
+            for f in figures]  # fmt: skip
 
 
 def _remembered_where(entry: dict) -> str:
@@ -1290,13 +1312,11 @@ def _confirmations(store, customer_id) -> list:
 
 def _covered(item: dict, confirmations: list) -> bool:
     """Whether the owner's yeses cover an estimate: one still on its document by a yes to its figure; one that left
-    its invoice by yeses adding up to its amount (a split asks until its parts do)."""
+    its invoice by one yes to a line with its description."""
     mine = [c for c in confirmations if c["source"] == item["source"] and _same_line(_key_of(c["key"]), item["key"])]
     if item["exact"]:
         return any(c["amount"] == item["amount"] for c in mine)
-    if item["amount"] is None:
-        return bool(mine)
-    return sum((to_decimal(c["amount"]) for c in mine), ZERO) >= to_decimal(item["amount"])
+    return bool(mine)
 
 
 def _drop_confirmations(store, customer_id, sources: set) -> None:
@@ -1316,14 +1336,15 @@ def _remember_estimates(store, doc: dict, removed: str) -> list:
     else:
         marked = _estimate_items(store, [ln for ln in doc["lines"] if ln.get("estimate")])
         found = [(marked, f"change_order:{doc['id']}", "", True)]
-    confirmations = _confirmations(store, doc["customer_id"])
+    confirmations, today = _confirmations(store, doc["customer_id"]), iso(store.today())
     left = [item for items, source, _, exact in found for item in items
             if not _covered(dict(item, source=source, exact=exact), confirmations)]  # fmt: skip
     _drop_confirmations(store, doc["customer_id"], {source for _, source, _, _ in found})
     if not left:
         return []
-    entry = {"id": "remembered:" + secrets.token_hex(5), "removed": removed, "date": iso(store.today()),
-             "lines": [{"key": i["key"], "amount": i["amount"], "figure": i["figure"]} for i in left]}  # fmt: skip
+    entry = {"id": "remembered:" + secrets.token_hex(5), "removed": removed, "date": today,
+             "lines": [{"key": i["key"], "amount": i["amount"], "figure": i["figure"], "date": i.get("date") or today}
+                       for i in left]}  # fmt: skip
     if removed != "deleted":  # a deleted draft's number is freed for the next invoice, so it isn't kept
         entry[doc["type"]] = doc["id"]
     _set_customer_field(store, doc["customer_id"], "unconfirmed_estimates",
@@ -1343,7 +1364,7 @@ def _estimate_sources(store, inv: dict) -> list:
     at any amount): taken off a draft, or remembered from a deleted or voided one."""
     customer = inv["customer_id"]
     confirmations = _confirmations(store, customer)
-    found = [(_entry_lines(entry), _entry_id(entry), _remembered_where(entry), False)
+    found = [([i for i in _entry_lines(entry) if _recent(store, i)], _entry_id(entry), _remembered_where(entry), False)
              for entry in _remembered(store, customer)]  # fmt: skip
     for other in store.docs("invoice"):
         if other["customer_id"] == customer and other["status"] == "draft" and other["id"] != inv["id"]:
@@ -1375,6 +1396,8 @@ def _matches(store, inv: dict, lines: list) -> list:
     found = []
     for ln in lines:
         key, amount = _line_key(ln), _amount(ln)
+        if to_decimal(amount) <= 0:
+            continue  # nothing billed ("Call-out (waived)"): it can't be a copy of an estimate's figure
         hits = [s for s in sources if _matches_source(key, amount, s)]
         if hits:
             found.append((ln, hits))
@@ -1461,12 +1484,14 @@ def _note_confirmed(store, customer_id, matches: list) -> None:
 
 
 def _prune_remembered(store, customer_id) -> None:
-    """Remembered estimates the owner's yeses now cover are forgotten, with the yeses about them."""
+    """Remembered estimates the owner's yeses now cover, or older than REMEMBER_DAYS, are forgotten, with the yeses
+    about them."""
     confirmations = _confirmations(store, customer_id)
     before, after, gone = _remembered(store, customer_id), [], set()
     for entry in before:
         ident = _entry_id(entry)
-        left = [i for i in _entry_lines(entry) if not _covered(dict(i, source=ident, exact=False), confirmations)]
+        left = [i for i in _entry_lines(entry)
+                if _recent(store, i) and not _covered(dict(i, source=ident, exact=False), confirmations)]  # fmt: skip
         if left:
             after.append(dict({k: v for k, v in entry.items() if k != "figures"}, id=ident, lines=left))
         else:
@@ -1475,6 +1500,42 @@ def _prune_remembered(store, customer_id) -> None:
         _set_customer_field(store, customer_id, "unconfirmed_estimates", after)
     if gone:
         _drop_confirmations(store, customer_id, gone)
+
+
+# What a plain yes to "Stop checking ... against these estimates?" may add ("yes, forget them").
+FORGET_WORDS = ("forget them", "forget", "forget it", "stop checking", "clear them")
+
+
+def forget_estimates(store, customer_id: str, owner_confirmed=None, confirm_code=None) -> dict:
+    """Stop checking a customer's invoices against estimates that left their invoices (taken off a draft, deleted or
+    voided), on the owner's plain yes: once they know those figures won't be billed, the questions stop."""
+    cust = store.customer(customer_id)
+    name = customer_label(store, cust["id"])
+    entries = _remembered(store, cust["id"])
+    drafts = [d for d in store.docs("invoice")
+              if d["customer_id"] == cust["id"] and d["status"] == "draft" and d.get("removed_estimates")]  # fmt: skip
+    listed = [f"{i['figure']} ({_remembered_where(e)})" for e in entries for i in _entry_lines(e) if _recent(store, i)]
+    listed += [f"{t['figure']} (taken off draft {d['id']})" for d in drafts for t in _taken_off(store, d)
+               if _recent(store, t)]  # fmt: skip
+    if not listed:
+        return {"customer": cust["id"], "forgotten": [],
+                "note": f"Nothing to forget: no estimates that left {name}'s invoices are being checked."}  # fmt: skip
+    question = (f"Stop checking {name}'s invoices against these estimates you never confirmed: {'; '.join(listed)}? "
+                "Copies of them won't be asked about any more.")  # fmt: skip
+    said = confirm.owner_yes(
+        store.home, f"customer.forget_estimates|{cust['id']}|{'; '.join(listed)}", question, owner_confirmed,
+        confirm_code,
+        why=f"Forgetting {name}'s unconfirmed estimates means copies of them won't be asked about, so only the owner "
+        "can approve it: ask, and wait for their answer.",
+        echo=FORGET_WORDS,
+    )
+    _set_customer_field(store, cust["id"], "unconfirmed_estimates", [])
+    for draft in drafts:
+        draft.pop("removed_estimates", None)
+        store.save_doc(draft)
+    store.log("customer.forget_estimates", cust["id"], owner_said=said, forgotten=listed)
+    confirm.use(store.home, confirm_code)  # the owner's yes counts once
+    return {"customer": cust["id"], "forgotten": listed, "owner_said": said}
 
 
 def _part_of_quote(inv: dict) -> bool:
@@ -1605,10 +1666,13 @@ def invoice_issue(
     store.save_doc(inv)
     if said:  # the owner confirmed these figures: they cover the estimates they matched elsewhere
         _note_confirmed(store, inv["customer_id"], matches)
-        _prune_remembered(store, inv["customer_id"])
+    _prune_remembered(store, inv["customer_id"])  # covered or older than REMEMBER_DAYS
+    if said:
         confirmations = _confirmations(store, inv["customer_id"])
-        left = [t for t in taken_off
-                if not _covered(dict(t, source=f"invoice:{inv['id']}:taken", exact=False), confirmations)]  # fmt: skip
+        present = [_line_key(ln) for ln in priced(inv["lines"])]
+        left = [t for t in _taken_off(store, dict(inv, removed_estimates=taken_off))
+                if _recent(store, t) and not any(_same_line(t["key"], key) for key in present)  # re-priced: confirmed
+                and not _covered(dict(t, source=f"invoice:{inv['id']}:taken", exact=False), confirmations)]  # fmt: skip
         if left:  # taken off it and never confirmed: a copy of them elsewhere still asks
             _set_customer_field(store, inv["customer_id"], "unconfirmed_estimates", _remembered(
                 store, inv["customer_id"]) + [{"id": "remembered:" + secrets.token_hex(5), "invoice": inv["id"],

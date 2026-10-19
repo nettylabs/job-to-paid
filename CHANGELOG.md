@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.4 (2026-10-19)
+
+Fixes from an independent check of 1.0.3.
+
+- **Removed estimates ask once, for 30 days.** An estimate that left its invoice (taken off a draft, deleted or
+  voided) is still asked about on another invoice with its description, but one yes from the owner clears it for
+  that customer and description, and it lapses 30 days after it left, saved records included. Before, a deleted
+  "Labour 8 h" made the next several "Labour 2 h" invoices ask, and "Extra labour" or "Spare parts" asked months
+  later.
+- **An honest re-price isn't "taken off".** An estimate re-priced on its own invoice (Call-out $89 to $99) is
+  checked only at its old figure while that invoice is a draft, and once the owner confirms the invoice it isn't
+  remembered at all. A genuine removal still is.
+- **A $0 line never asks** as a copy of an estimate ("Call-out (waived)").
+- **`jtp customer forget-estimates`** stops the checks against a customer's removed estimates, after the owner's
+  two-step yes.
+- **More retypes are recognised:** "Callout fee", "Call-outs" (a plural s), an Armenian օ, a Latin ɑ and a 0 or 1
+  standing for a letter. The duplicate-name warning folds accents and lookalike letters too ("Jane Doé").
+- 99 automated tests on Python 3.9, 3.11 and 3.13, and a 44-check self-test.
+
 ## 1.0.3 (2026-10-19)
 
 Fixes from an independent recheck of 1.0.2.

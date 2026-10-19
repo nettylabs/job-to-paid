@@ -21,14 +21,19 @@
   when issuing does, and an estimate changed or taken off a draft is named in its question. Progress, deposit and
   balance invoices built from an estimated quote ask too. A line that repeats an estimate the owner hasn't
   confirmed for the same customer is asked about when its invoice is issued, even without the mark:
-  - an estimate still on another draft, a change order or an accepted quote, by the same description and amount;
+  - an estimate still on another draft, a change order or an accepted quote, by the same description and amount
+    (one re-priced on its draft, at its old figure);
   - an estimate that left its invoice (taken off a draft, or on a draft or change order that was deleted or
     voided), by its description at any amount, also inside a longer description, so a re-priced, split or merged
-    copy asks, until the owner's yeses add up to its amount.
+    copy asks. One yes from the owner to such a line clears it for that customer and description, and it lapses
+    30 days after it left. An estimate re-priced on its own invoice and confirmed there isn't kept as one that left.
 
-  Descriptions are compared without case, spacing, punctuation, accents or lookalike letters. The owner's yes
-  covers only the estimates it was about, for 30 days: a newly marked estimate with the same figure asks again.
-  A code proves the question was asked, not who answered: the agent is trusted to ask the owner.
+  A line of $0 or less never counts as a copy. Descriptions are compared without case, spacing, punctuation,
+  accents, a plural s, lookalike letters or a 0 or 1 standing for a letter. The owner's yes covers only the
+  estimates it was about, for 30 days: a newly marked estimate with the same figure asks again. The owner can
+  stop the checks against a customer's estimates that left their invoices with `jtp customer forget-estimates`,
+  which asks them first. A code proves the question was asked, not who answered: the agent is trusted to ask the
+  owner.
 - **Known limit.** A copied estimate is recognised by its description and its customer. Figures copied to a
   different customer, a copy of an open estimate retyped at a different amount, or a copy under a different
   description aren't recognised. That would be the agent deliberately working against its instructions, which a

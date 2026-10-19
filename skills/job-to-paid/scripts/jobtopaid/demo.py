@@ -639,6 +639,30 @@ def selftest() -> dict:
             asked = _refusal(docs.invoice_issue, store, again)
             check("a yes covers only the estimate it was about: a new estimate of the same figure asks again",
                   asked == "estimates_unconfirmed", asked)  # fmt: skip
+
+            # 1.0.4: removed-estimate memory clears after one yes; an honest re-price isn't "taken off"; $0 lines.
+            fifth = records.customer_add(store, {"name": "Selftest Five", "email": "five@x.example"})["customer"]["id"]
+            hours = {"kind": "labour", "description": "Labour", "qty": 2}
+            gone = docs.invoice_create(store, customer_id=fifth, spec={"lines": [dict(hours, qty=8, estimate=True)]})
+            docs.invoice_delete(store, gone["invoice"]["id"])
+            first = docs.invoice_create(store, customer_id=fifth, spec={"lines": [hours]})["invoice"]["id"]
+            _with_estimates_yes(docs.invoice_issue, store, first)
+            second = docs.invoice_create(store, customer_id=fifth, spec={"lines": [hours]})["invoice"]["id"]
+            asked = _refusal(docs.invoice_issue, store, second)
+            check("a removed estimate is asked about once: one yes clears it", asked is None, asked)
+            sixth = records.customer_add(store, {"name": "Selftest Six", "email": "six@x.example"})["customer"]["id"]
+            fixed = docs.invoice_create(store, customer_id=sixth, spec={"lines": [dict(call_out, estimate=True)]})
+            fixed = fixed["invoice"]["id"]
+            docs.invoice_update(store, fixed, {"lines": [dict(call_out, unit_price="99", estimate=True)]})
+            _with_estimates_yes(docs.invoice_issue, store, fixed)
+            check("an estimate re-priced and confirmed on its invoice isn't remembered as taken off",
+                  not store.customer(sixth).get("unconfirmed_estimates"), store.customer(sixth))  # fmt: skip
+            gone = docs.invoice_create(store, customer_id=sixth, spec={"lines": [dict(call_out, estimate=True)]})
+            docs.invoice_delete(store, gone["invoice"]["id"])
+            waived = docs.invoice_create(store, customer_id=sixth, spec={"lines": [
+                dict(call_out, description="Call-out (waived)", unit_price="0"), repair]})["invoice"]["id"]  # fmt: skip
+            asked = _refusal(docs.invoice_issue, store, waived)
+            check("a $0 line never asks as a copy of an estimate", asked is None, asked)
             bank = {"payment": {"methods": [{"name": "Bank", "instructions": "Account 99916045550100, ref 5550100."}]}}
             moved, _ = follow_contact(bank, "business.phone", "+1 604 555 0100", "+1 604 555 0199")
             check("a phone change leaves account numbers alone", not moved, bank["payment"]["methods"])

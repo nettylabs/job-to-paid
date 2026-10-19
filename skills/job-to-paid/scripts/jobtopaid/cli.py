@@ -428,6 +428,9 @@ def cmd_customer(store, args):
         return reports.customer_summary(store, args.id)
     if args.action == "update":
         return records.customer_update(store, args.id, _customer_fields(args))
+    if args.action == "forget-estimates":
+        _need_id(args, "customer", "C-0001")
+        return docs.forget_estimates(store, args.id, args.owner_confirmed, args.confirm)
     raise JTPError("Unknown customer action.")
 
 
@@ -1230,10 +1233,11 @@ def build_parser() -> argparse.ArgumentParser:
             "jtp customer list --search jane",
             "jtp customer show C-0001",
             "jtp customer update C-0001 --preferred whatsapp",
+            "jtp customer forget-estimates C-0001   (asks the owner first: returns the question and its code)",
         ],
         cmd_customer,
     )
-    p.add_argument("action", choices=["add", "list", "show", "update"])
+    p.add_argument("action", choices=["add", "list", "show", "update", "forget-estimates"])
     p.add_argument("id", nargs="?")
     for flag in (
         "--name",
@@ -1250,6 +1254,12 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         p.add_argument(flag, help=FLAG_HELP.get(flag))
     p.add_argument("--preferred", choices=list(records.CONTACT_CHANNELS))
+    p.add_argument(
+        "--owner-confirmed",
+        metavar="WORDS",
+        help="forget-estimates: the owner's own words; only a plain yes counts",
+    )
+    p.add_argument("--confirm", metavar="CODE", help="forget-estimates: the code that came with the owner's question")
 
     p = _add(
         sub,

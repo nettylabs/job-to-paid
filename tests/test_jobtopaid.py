@@ -885,10 +885,8 @@ class WorkflowTests(StoreCase):
         merged = {"kind": "fee", "description": "Repair and call-out", "unit_price": "279"}
         self._asked(self._draft_for(customer, merged))
         self._issue_with_the_owners_yes(self._draft_for(customer, dict(call_out, unit_price="50")))
-        part = {"kind": "fee", "description": "Call-out part 2", "unit_price": "39"}
-        self._issue_with_the_owners_yes(self._draft_for(customer, part))  # $50 alone didn't cover the $89
-        later = self._draft_for(customer, dict(call_out, unit_price="20"))  # $50 + $39: now covered
-        self.assertEqual(docs.invoice_issue(self.store, later)["invoice"]["status"], "issued")
+        part = {"kind": "fee", "description": "Call-out part 2", "unit_price": "39"}  # one yes covered the estimate
+        self.assertEqual(docs.invoice_issue(self.store, self._draft_for(customer, part))["invoice"]["status"], "issued")
         other = self._customer("Deleted Any Amount")
         draft = self._draft_for(other, dict(call_out, estimate=True))
         docs.invoice_delete(self.store, draft)
@@ -897,6 +895,97 @@ class WorkflowTests(StoreCase):
                 copy = self._draft_for(other, dict(call_out, description=retyped, unit_price="95"))
                 question = self._asked(copy).ask_owner
                 self.assertIn("(Call-out: 1 ea at $89.00 = $89.00 CAD, on a deleted draft)", question)
+
+    def _issued_plain(self, customer, *lines):
+        return docs.invoice_issue(self.store, self._draft_for(customer, *lines))["invoice"]["status"]
+
+    def test_removed_estimate_memory_clears_after_one_yes_and_lapses_after_30_days(self):
+        """An independent review of 1.0.3: after a deleted "Labour 8 h" estimate, the next several "Labour 2 h"
+        invoices each asked, and "Extra labour" or "Spare parts" still asked months later."""
+        customer = self._customer("Labour Customer")
+        labour = {"kind": "labour", "description": "Labour", "qty": 2}
+        docs.invoice_delete(self.store, self._draft_for(customer, dict(labour, qty=8, estimate=True)))
+        self.assertIn("Labour: 8 hr", self._issue_with_the_owners_yes(self._draft_for(customer, labour)))
+        self.assertEqual(self._issued_plain(customer, labour), "issued")  # one yes cleared it for that description
+        self.assertEqual(self._issued_plain(customer, {"kind": "labour", "description": "Extra labour", "qty": 1}),
+                         "issued")  # fmt: skip
+        self.assertNotIn("unconfirmed_estimates", self.store.customer(customer))
+        later = self._customer("Later Customer")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        docs.invoice_delete(self.store, self._draft_for(later, dict(call_out, estimate=True)))
+        a = self._draft_for(later, dict(call_out, description="Travel", estimate=True), labour)
+        docs.invoice_update(self.store, a, {"lines": [labour]})  # an estimate taken off an open draft
+        self._asked(self._draft_for(later, dict(call_out, unit_price="95")))
+        os.environ["JTP_TODAY"] = "2026-11-16"  # 32 days on: the deleted and taken-off estimates have lapsed
+        self.assertEqual(self._issued_plain(later, dict(call_out, unit_price="95")), "issued")
+        self.assertEqual(self._issued_plain(later, {"kind": "fee", "description": "Travel", "unit_price": "40"}),
+                         "issued")  # fmt: skip
+        self.assertNotIn("unconfirmed_estimates", self.store.customer(later))  # the saved record went too
+
+    def test_an_honest_reprice_confirmed_on_its_invoice_isnt_remembered_as_taken_off(self):
+        """An independent review of 1.0.3: Call-out $89 re-priced to $99 with the mark kept, and the owner's yes
+        given on that invoice, still made the next Call-out invoice ask about "$89 taken off"."""
+        customer = self._customer("Reprice Customer")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        a = self._draft_for(customer, dict(call_out, estimate=True))
+        docs.invoice_update(self.store, a, {"lines": [dict(call_out, unit_price="99", estimate=True)]})
+        self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="95")), "issued")  # re-priced: only
+        self.assertIn(f"(changed on draft {a})", self._asked(self._draft_for(customer, call_out)).ask_owner)  # $89
+        question = self._issue_with_the_owners_yes(a)
+        self.assertIn("Call-out: 1 ea at $89.00 = $89.00 CAD was an estimate, since changed", question)
+        self.assertNotIn("unconfirmed_estimates", self.store.customer(customer))
+        self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="99")), "issued")
+        parts = {"kind": "material", "description": "Parts", "qty": 1, "unit_cost": "240"}
+        b = self._draft_for(customer, dict(parts, estimate=True), {"kind": "labour", "description": "Fit", "qty": 1})
+        docs.invoice_update(self.store, b, {"lines": [{"kind": "labour", "description": "Fit", "qty": 1}]})
+        self._issue_with_the_owners_yes(b)  # a real removal, then the owner's yes: still remembered
+        spare = {"kind": "material", "description": "Spare parts", "qty": 1, "unit_cost": "20"}
+        self.assertIn(f"(Parts: 1 ea at $300.00 = $300.00 CAD, taken off invoice {b} before it was issued)",
+                      self._issue_with_the_owners_yes(self._draft_for(customer, spare)))  # fmt: skip
+        self.assertEqual(self._issued_plain(customer, spare), "issued")  # and one yes cleared it
+
+    def test_an_open_estimate_matches_its_name_written_without_the_space(self):
+        """A copy of an estimate still on its draft, with its name written "Callout" for "Call-out", asks."""
+        customer = self._customer("Spacing Customer")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        estimate = self._draft_for(customer, dict(call_out, estimate=True))
+        copy = self._draft_for(customer, dict(call_out, description="Callout"))
+        self.assertIn(f"(Call-out: 1 ea at $89.00 = $89.00 CAD, on draft {estimate})", self._asked(copy).ask_owner)
+
+    def test_a_zero_line_never_matches_an_estimate(self):
+        """An independent review of 1.0.3: a "Call-out (waived)" $0 line asked on every invoice."""
+        customer = self._customer("Waived Customer")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        docs.invoice_delete(self.store, self._draft_for(customer, dict(call_out, estimate=True)))
+        for _ in range(2):
+            waived = dict(call_out, description="Call-out (waived)", unit_price="0")
+            self.assertEqual(self._issued_plain(customer, waived, {"kind": "labour", "description": "Fit", "qty": 1}),
+                             "issued")  # fmt: skip
+        self._asked(self._draft_for(customer, call_out))  # the estimate is still remembered
+
+    def test_more_retypes_match_and_the_owner_can_forget_estimates(self):
+        """An independent review of 1.0.3: "Callout fee", "Call-outs", an Armenian օ, a Latin ɑ and a digit 0 got
+        past a removed "Call-out"; and nothing could retire a customer's remembered estimates."""
+        customer = self._customer("Retype Customer")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        docs.invoice_delete(self.store, self._draft_for(customer, dict(call_out, estimate=True)))
+        for retyped in ("Callout fee", "Call-outs", "Call-\u0585ut", "C\u0251ll-out", "Call-0ut"):
+            with self.subTest(retyped=retyped):
+                self._asked(self._draft_for(customer, dict(call_out, description=retyped, unit_price="95")))
+        with self.assertRaises(JTPError) as caught:
+            docs.forget_estimates(self.store, customer)
+        asked = caught.exception
+        self.assertEqual(asked.ask_owner, "Stop checking Retype Customer's invoices against these estimates you never "
+                         "confirmed: Call-out: 1 ea at $89.00 = $89.00 CAD (on a deleted draft)? Copies of them won't "
+                         "be asked about any more.")  # fmt: skip
+        with self.assertRaises(JTPError) as caught:
+            docs.forget_estimates(self.store, customer, owner_confirmed="ok", confirm_code=asked.confirm)
+        self.assertEqual(caught.exception.code, "unclear_answer")
+        out = docs.forget_estimates(self.store, customer, owner_confirmed="yes, forget them",
+                                    confirm_code=asked.confirm)  # fmt: skip
+        self.assertEqual(out["forgotten"], ["Call-out: 1 ea at $89.00 = $89.00 CAD (on a deleted draft)"])
+        self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="95")), "issued")
+        self.assertIn("Nothing to forget", docs.forget_estimates(self.store, customer)["note"])
 
     def test_a_yes_only_covers_the_estimates_it_was_about(self):
         """An independent review of 1.0.2: after a yes to a copy of "Call-out $89", a later, new estimate of the same
@@ -911,8 +1000,9 @@ class WorkflowTests(StoreCase):
         self.assertIn(f"(on draft {second})", self._asked(self._draft_for(customer, call_out)).ask_owner)
         docs.invoice_update(self.store, second, {"lines": [{"kind": "labour", "description": "Repair", "qty": 1}]})
         self.assertIn("Call-out: 1 ea at $89.00 = $89.00 CAD was an estimate", self._asked(second).ask_owner)
-        os.environ["JTP_TODAY"] = "2026-11-20"  # more than 30 days on: the yes about the first has expired
-        self.assertIn(f"(on draft {first};", self._asked(self._draft_for(customer, call_out)).ask_owner)
+        os.environ["JTP_TODAY"] = "2026-11-20"  # more than 30 days on: the yes about the first has expired, and so
+        self.assertIn(f"(on draft {first})", self._asked(self._draft_for(customer, call_out)).ask_owner)  # has the
+        # memory of the one taken off the second (only open estimates are still checked)
 
     def test_a_yes_to_other_figures_doesnt_clear_remembered_estimates(self):
         """An independent review of 1.0.1: the question named only the new invoice's figures, so a yes to a $10
@@ -1027,6 +1117,8 @@ class WorkflowTests(StoreCase):
                                              f"(jane@example.com). If it's the same person, use {self.cust['id']} "
                                              f"instead of {again['customer']['id']}."])  # fmt: skip
         self.assertNotIn("warnings", records.customer_add(self.store, {"name": "Sam Lee"}))
+        accented = records.customer_add(self.store, {"name": "Jane Doé", "email": "jd2@other.example"})
+        self.assertIn(f"There's already a customer called Jane Doe: {self.cust['id']}", accented["warnings"][0])
 
     def test_a_draft_from_an_older_version_that_had_estimates_still_asks(self):
         """A draft saved by 1.0.1 with its estimate taken off has had_estimates but no record of the estimate itself:
@@ -1569,6 +1661,21 @@ class CliTests(unittest.TestCase):
                 code, out = self.run_cli(home, *args, "--dry-run")
                 self.assertEqual((code, out["code"]), (1, "usage"), args)
             self.assertEqual(self.run_cli(home, "invoice", "show", inv)[1]["invoice"]["status"], "draft")
+
+    def test_forget_estimates_takes_the_owners_two_step_yes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo")
+            code, out = self.run_cli(home, "customer", "forget-estimates", "C-0001")
+            self.assertEqual((code, out["forgotten"]), (0, []))  # nothing remembered: nothing to ask
+            self.run_cli(home, "invoice", "create", "--customer", "C-0001", "--spec",
+                         '[{"kind":"fee","description":"Call-out","unit_price":89,"estimate":true}]')  # fmt: skip
+            self.run_cli(home, "invoice", "delete", "INV-0003")
+            code, out = self.run_cli(home, "customer", "forget-estimates", "C-0001")
+            self.assertEqual((code, out["code"]), (1, "needs_owner"))
+            code, out = self.run_cli(home, "customer", "forget-estimates", "C-0001", "--owner-confirmed", "yes",
+                                     "--confirm", out["confirm"])  # fmt: skip
+            self.assertEqual((code, len(out["forgotten"])), (0, 1))
 
     def test_customer_update_warns_about_a_name_another_customer_has(self):
         with tempfile.TemporaryDirectory() as tmp:
