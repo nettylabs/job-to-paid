@@ -427,7 +427,7 @@ def cmd_customer(store, args):
     if args.action == "show":
         return reports.customer_summary(store, args.id)
     if args.action == "update":
-        return {"customer": records.customer_update(store, args.id, _customer_fields(args))}
+        return records.customer_update(store, args.id, _customer_fields(args))
     raise JTPError("Unknown customer action.")
 
 

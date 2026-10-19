@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.3 (2026-10-19)
+
+Fixes from an independent recheck of 1.0.2.
+
+- **An estimate that left its invoice is recognised at any amount.** One taken off a draft, or on a draft or change
+  order that was deleted or voided, is asked about when a line with its description turns up on another invoice
+  for the customer, also inside a longer description. A copy re-priced by a cent, split into two lines or merged
+  into a bigger one asks, until the owner's yeses add up to the estimate. An estimate still on its draft, change
+  order or quote keeps needing the same figure, so ordinary lines with a common name aren't asked about.
+- **A yes covers only the estimates it was about.** It no longer covers every later estimate of the same figure
+  for that customer: a newly marked estimate asks again, and a yes about a copy lapses after 30 days.
+- **Descriptions are compared more loosely:** "Callout" is "Call-out", and lookalike letters ("Cаll-out" with a
+  Cyrillic а) and accents are folded.
+- **The agent's guide** says when an estimate is asked about, but no longer spells out how copies are matched;
+  that's in SECURITY.md. The SKILL says to keep the estimate mark when you change a quantity or price.
+- **Renaming a customer** to another customer's name gets the same warning as adding one.
+- 93 automated tests on Python 3.9, 3.11 and 3.13, and a 41-check self-test.
+
 ## 1.0.2 (2026-10-18)
 
 Fixes from an independent review of 1.0.1.

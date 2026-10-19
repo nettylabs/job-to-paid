@@ -19,15 +19,20 @@
   own words are a plain yes ("ok", "sure" or "yes, next week" isn't) and come back with that code, which is tied to
   that action and its figures and works once. Editing an invoice can't take an estimate off: only the owner's yes
   when issuing does, and an estimate changed or taken off a draft is named in its question. Progress, deposit and
-  balance invoices built from an estimated quote ask too. A line with the same description and amount as an
-  estimate the owner hasn't confirmed for the same customer (on another draft, a change order or an accepted quote,
-  or one that was deleted, voided or taken off an invoice) is asked about when its invoice is issued, even without
-  the mark. Once the owner confirms a figure for a customer, it isn't asked about again. A code proves the question
-  was asked, not who answered: the agent is trusted to ask the owner.
-- **Known limit.** A copied estimate is recognised by its description (case, spacing and punctuation aside), its
-  amount and its customer. Figures copied to a different customer, or retyped at a different amount or under a
-  different description, aren't recognised. That would be the agent deliberately working against its
-  instructions, which a confirmation step can't prevent.
+  balance invoices built from an estimated quote ask too. A line that repeats an estimate the owner hasn't
+  confirmed for the same customer is asked about when its invoice is issued, even without the mark:
+  - an estimate still on another draft, a change order or an accepted quote, by the same description and amount;
+  - an estimate that left its invoice (taken off a draft, or on a draft or change order that was deleted or
+    voided), by its description at any amount, also inside a longer description, so a re-priced, split or merged
+    copy asks, until the owner's yeses add up to its amount.
+
+  Descriptions are compared without case, spacing, punctuation, accents or lookalike letters. The owner's yes
+  covers only the estimates it was about, for 30 days: a newly marked estimate with the same figure asks again.
+  A code proves the question was asked, not who answered: the agent is trusted to ask the owner.
+- **Known limit.** A copied estimate is recognised by its description and its customer. Figures copied to a
+  different customer, a copy of an open estimate retyped at a different amount, or a copy under a different
+  description aren't recognised. That would be the agent deliberately working against its instructions, which a
+  confirmation step can't prevent.
 
 ## Reporting a vulnerability
 
