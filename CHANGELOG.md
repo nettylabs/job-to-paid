@@ -4,12 +4,17 @@
 
 Fixes from an independent review of 1.0.1.
 
-- **Copied estimates are recognised by their lines.** A line that repeats an estimate the owner hasn't confirmed
-  for the same customer is asked about when its invoice is issued, even without the mark. The question names it
-  and says where the estimate is: on another draft that's still open or an unbilled change order (both new), or on
-  a draft or change order that was deleted or voided. An invoice with none of those lines isn't asked, and the
-  owner's yes forgets only the figures it named. Before, a yes to any invoice for that customer cleared estimates
-  the owner never saw.
+- **Copied estimates are recognised by their figures.** A line with the same description and amount as an
+  estimate the owner hasn't confirmed for the same customer is asked about when its invoice is issued, even without
+  the mark. The question names it and says where the estimate is: on another draft that's still open, an unbilled
+  change order or an accepted quote (all new), or on a draft or change order that was deleted or voided. An
+  invoice with none of those figures isn't asked, and once the owner confirms a figure for a customer, it isn't
+  asked about again. Before, a yes to any invoice for that customer cleared estimates the owner never saw, and an
+  open estimate made every line with the same name ask, again after every yes.
+- **An estimate changed or taken off a draft stays on record.** The draft's own question names it, and the same
+  figure on another invoice still asks, also after the draft is issued, deleted or voided. Before, an estimate
+  moved from one invoice to another was never asked about.
+- Descriptions are matched without case, spacing or punctuation ("Call out" is "Call-out").
 - **Voiding a change order remembers its estimates**, the same way as a voided draft invoice.
 - **Phone numbers.** When the phone changes, "+44 (0)20 7946 0100" is recognised as the old number, and a number
   that only ends like the old one (a local "555-0100", an account number) is named in a warning rather than left
@@ -18,7 +23,7 @@ Fixes from an independent review of 1.0.1.
   across two records.
 - SECURITY.md states the estimate check's known limit (figures copied to a different customer, or under a
   different description), and its lines fit the wrap width.
-- 82 automated tests on Python 3.9, 3.11 and 3.13, and a 36-check self-test.
+- 87 automated tests on Python 3.9, 3.11 and 3.13, and a 39-check self-test.
 
 ## 1.0.1 (2026-10-18)
 

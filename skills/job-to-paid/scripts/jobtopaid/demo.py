@@ -582,6 +582,32 @@ def selftest() -> dict:
             asked = _refusal(docs.invoice_issue, store, billed)
             check("a voided change order's estimate is remembered: billing it again asks the owner",
                   asked == "estimates_unconfirmed", asked)  # fmt: skip
+
+            # The 1.0.2 check's findings: estimates are matched by description and figure.
+            other = records.customer_add(store, {"name": "Selftest Customer", "email": "selftest@x.example"})
+            who = other["customer"]["id"]
+            call_out, repair = fee[0], {"kind": "labour", "description": "Repair", "qty": 2}
+            moved = docs.invoice_create(store, customer_id=who, spec={"lines": [dict(call_out, estimate=True), repair]})
+            docs.invoice_update(store, moved["invoice"]["id"], {"lines": [repair]})  # the estimate taken off...
+            elsewhere = docs.invoice_create(store, customer_id=who, spec={"lines": [call_out]})  # ...and retyped
+            asked = _refusal(docs.invoice_issue, store, elsewhere["invoice"]["id"])
+            check("an estimate moved to another invoice asks the owner", asked == "estimates_unconfirmed", asked)
+            hours = {"kind": "labour", "description": "Labour", "qty": 4, "estimate": True}
+            docs.invoice_create(store, customer_id=who, spec={"lines": [hours]})  # stays an open draft
+            one_hour = docs.invoice_create(store, customer_id=who, spec={"lines": [dict(hours, qty=1, estimate=False)]})
+            asked = _refusal(docs.invoice_issue, store, one_hour["invoice"]["id"])
+            check("an open estimate only makes the same figure ask (not every line with its name)", asked is None,
+                  asked)  # fmt: skip
+            heater = {"kind": "material", "description": "Heater", "qty": 1, "unit_cost": "900"}
+            quoted = docs.quote_create(store, {"title": "Heater", "lines": [dict(heater, estimate=True)]},
+                                       customer_id=who)["quote"]  # fmt: skip
+            quote_job = docs.quote_accept(store, quoted["id"], None, "Selftest Customer", "email", None)["job"]
+            price = quoted["options"][0]["lines"][0]["unit_price"]
+            retyped = docs.invoice_create(store, job_id=quote_job, spec={"lines": [
+                {"kind": "material", "description": "Heater", "qty": 1, "unit_price": price}]})  # fmt: skip
+            asked = _refusal(docs.invoice_issue, store, retyped["invoice"]["id"])
+            check("an accepted quote's estimate retyped on an invoice asks the owner", asked == "estimates_unconfirmed",
+                  asked)  # fmt: skip
             bank = {"payment": {"methods": [{"name": "Bank", "instructions": "Account 99916045550100, ref 5550100."}]}}
             moved, _ = follow_contact(bank, "business.phone", "+1 604 555 0100", "+1 604 555 0199")
             check("a phone change leaves account numbers alone", not moved, bank["payment"]["methods"])
