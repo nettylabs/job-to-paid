@@ -535,7 +535,8 @@ def selftest() -> dict:
             moved, _ = follow_contact(canada, "business.phone", canada["business"]["phone"], "+1 604 555 0199")
             card = canada["payment"]["methods"][-1]["instructions"]
             check("payment instructions follow a new phone number", moved == ["Card"] and "555 0199" in card, card)
-            soon = docs.invoice_create(store, customer_id=customer, spec={"lines": fee})["invoice"]["id"]
+            service = [{"kind": "fee", "description": "Service call", "unit_price": "120"}]  # not the estimate
+            soon = docs.invoice_create(store, customer_id=customer, spec={"lines": service})["invoice"]["id"]
             docs.invoice_issue(store, soon)
             brief = reports.brief(store)
             named = [line.split()[1] for line in brief["text"].splitlines() if line.startswith("  - INV-")]
@@ -558,10 +559,28 @@ def selftest() -> dict:
             asked = _refusal(docs.invoice_issue, store, progress_100)
             check("a progress invoice from an estimated quote asks the owner, even at 100%",
                   asked == "estimates_unconfirmed", asked)  # fmt: skip
+            stripped = [{k: v for k, v in line.items() if k != "estimate"}
+                        for line in docs.lines_as_spec(store.doc(progress_100)["lines"])]  # fmt: skip
             docs.invoice_delete(store, progress_100)  # the newest draft, so its number goes back
-            copied = docs.invoice_create(store, customer_id=customer, spec={"lines": fee})["invoice"]["id"]
-            asked = _refusal(docs.invoice_issue, store, copied)
-            check("a draft deleted with estimates is remembered: the customer's next invoice asks",
+            copied = docs.invoice_create(store, customer_id=customer, spec={"lines": stripped})["invoice"]
+            asked = _refusal(docs.invoice_issue, store, copied["id"])
+            unrelated = _refusal(docs.invoice_issue, store, docs.invoice_create(
+                store, customer_id=customer, spec={"lines": service})["invoice"]["id"])  # fmt: skip
+            remembered = store.customer(customer).get("unconfirmed_estimates")
+            check("a copy of a deleted draft's estimate asks the owner; an unrelated invoice doesn't, nor clears it",
+                  asked == "estimates_unconfirmed" and unrelated is None and remembered, (asked, unrelated))  # fmt: skip
+            open_copy = docs.invoice_create(store, customer_id=customer, spec={"lines": fee})["invoice"]["id"]
+            asked = _refusal(docs.invoice_issue, store, open_copy)  # the estimated Call-out draft is still open
+            check("a copy of an estimate on a draft that's still open asks the owner",
+                  asked == "estimates_unconfirmed", asked)  # fmt: skip
+            tap = {"kind": "fee", "description": "Extra tap", "unit_price": "40"}
+            dropped = docs.co_create(store, job_id, {"title": "Tap", "lines": [dict(tap, estimate=True)]})
+            docs.co_void(store, dropped["change_order"]["id"], "Re-doing it")
+            redone = docs.co_create(store, job_id, {"title": "Tap", "lines": [tap]})["change_order"]["id"]
+            docs.co_approve(store, redone, "Priya Patel", "text message", None)
+            billed = docs.invoice_create(store, job_id=job_id)["invoice"]["id"]
+            asked = _refusal(docs.invoice_issue, store, billed)
+            check("a voided change order's estimate is remembered: billing it again asks the owner",
                   asked == "estimates_unconfirmed", asked)  # fmt: skip
             bank = {"payment": {"methods": [{"name": "Bank", "instructions": "Account 99916045550100, ref 5550100."}]}}
             moved, _ = follow_contact(bank, "business.phone", "+1 604 555 0100", "+1 604 555 0199")

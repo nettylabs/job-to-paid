@@ -13,7 +13,7 @@ description: >-
 license: MIT
 compatibility: Needs Python 3.9+ on the agent's computer. Standard library only, local files only, no network calls.
 metadata:
-  version: "1.0.1"
+  version: "1.0.2"
 ---
 
 # Job to Paid

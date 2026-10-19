@@ -18,8 +18,13 @@
   and making a credit note each stop with the exact question and a one-time code. They run only when the owner's
   own words are a plain yes ("ok", "sure" or "yes, next week" isn't) and come back with that code, which is tied to
   that action and its figures and works once. Editing an invoice can't take an estimate off: only the owner's yes
-  when issuing does. Progress, deposit and balance invoices built from an estimated quote ask too, and a draft
-  deleted or voided with unconfirmed estimates is remembered, so the customer's next invoice asks. A code proves the question was asked, not who answered: the agent is trusted to ask the owner.
+  when issuing does. Progress, deposit and balance invoices built from an estimated quote ask too. A line that
+  repeats an estimate the owner hasn't confirmed for the same customer (on another draft or change order, or one
+  that was deleted or voided) is asked about when its invoice is issued, even without the mark. A code proves the
+  question was asked, not who answered: the agent is trusted to ask the owner.
+- **Known limit.** A copied estimate is recognised by its description and its customer. Figures copied to a
+  different customer, or retyped under a different description, aren't recognised. That would be the agent
+  deliberately working against its instructions, which a confirmation step can't prevent.
 
 ## Reporting a vulnerability
 

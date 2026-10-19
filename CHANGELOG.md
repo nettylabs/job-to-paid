@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.2 (2026-10-18)
+
+Fixes from an independent review of 1.0.1.
+
+- **Copied estimates are recognised by their lines.** A line that repeats an estimate the owner hasn't confirmed
+  for the same customer is asked about when its invoice is issued, even without the mark. The question names it
+  and says where the estimate is: on another draft that's still open or an unbilled change order (both new), or on
+  a draft or change order that was deleted or voided. An invoice with none of those lines isn't asked, and the
+  owner's yes forgets only the figures it named. Before, a yes to any invoice for that customer cleared estimates
+  the owner never saw.
+- **Voiding a change order remembers its estimates**, the same way as a voided draft invoice.
+- **Phone numbers.** When the phone changes, "+44 (0)20 7946 0100" is recognised as the old number, and a number
+  that only ends like the old one (a local "555-0100", an account number) is named in a warning rather than left
+  without a word.
+- **A second customer with the same name gets a warning** naming the first, so one person's history isn't split
+  across two records.
+- SECURITY.md states the estimate check's known limit (figures copied to a different customer, or under a
+  different description), and its lines fit the wrap width.
+- 82 automated tests on Python 3.9, 3.11 and 3.13, and a 36-check self-test.
+
 ## 1.0.1 (2026-10-18)
 
 Fixes from three rounds of an independent review.
