@@ -114,9 +114,9 @@ def _keep_quoted_copy(store, args, doc, out: dict) -> None:
 
 
 def _money(store, value) -> str:
-    from .money import format_money
+    from .money import format_total
 
-    return format_money(to_decimal(value), store.money())
+    return format_total(to_decimal(value), store.money())
 
 
 def _day(store, text) -> str:
@@ -126,16 +126,7 @@ def _day(store, text) -> str:
 
 
 def _cust_name(store, customer_id) -> str:
-    if customer_id == docs.SAMPLE_CUSTOMER:
-        return "Sample Customer"
-    try:
-        cust = store.customer(customer_id)
-    except JTPError:
-        return customer_id
-    company, name = cust.get("company"), cust.get("name")
-    if company and name and company.lower() != name.lower():
-        return f"{company} ({name})"
-    return name or company or customer_id
+    return docs.customer_label(store, customer_id)
 
 
 def _quote_summary(store, doc) -> str:
@@ -387,15 +378,19 @@ def cmd_profile(store, args):
             for k in ("currency_symbol", "symbol_position", "decimal_separator", "thousands_separator"):
                 data["locale"].pop(k, None)
         _set_dotted(data, args.key, value)
+        followed, warnings = profile_mod.follow_contact(data, args.key, existing, value)
         errors = profile_mod.validate(data)
         if errors:
             raise JTPError("Not saved: " + " ".join(errors))
         store.save_profile(data)
         store.log("profile.set", None, key=args.key)
-        warnings = []
         if args.key == "business.logo_path" and value and not Path(str(value)).expanduser().is_file():
             warnings.append(f"No file at {value}; the logo will be skipped until it exists.")
-        return {"saved": args.key, "value": value, "warnings": warnings}
+        out = {"saved": args.key, "value": value, "warnings": warnings}
+        if followed:
+            out["payment_methods_updated"] = followed
+            out["note"] = f"Also changed it in the payment instructions for {', '.join(followed)}."
+        return out
     raise JTPError("Unknown profile action.")
 
 
@@ -785,7 +780,28 @@ def cmd_invoice(store, args):
             args.allow_unconfirmed_tax,
             owner_confirmed=args.owner_confirmed,
             confirm_code=args.confirm,
+            dry_run=args.dry_run,
         )
+        if out.get("dry_run"):
+            would = out["would_issue"]
+            out["summary"] = "Preview only, nothing saved or issued. " + _invoice_summary(
+                store, dict(out["invoice"], id=would)
+            )
+            if out.get("owner_question"):
+                out["next"] = (
+                    f"Issuing it asks the owner first: run jtp invoice issue {would} without --dry-run. It returns the "
+                    "question (ask_owner) and its code"
+                )
+            _render(store, args, out["invoice"], out)
+            return out
+        if out.get("already_issued"):
+            inv = out["invoice"]
+            _render(store, args, inv, out)
+            out = _status_out(store, out, "invoice", _invoice_summary)
+            out["summary"] = f"{inv['id']} was already issued on {_day(store, inv['date'])}; nothing changed. " + (
+                out["summary"]
+            )
+            return out
         confirmed = out["invoice"].get("estimates_confirmed") or {}
         if args.owner_confirmed and confirmed.get("owner_said"):
             out["note"] = f'Kept the owner\'s confirmation of the estimated figures: "{confirmed["owner_said"]}"'
@@ -852,12 +868,18 @@ def cmd_invoice(store, args):
         _render(store, args, out["invoice"], out)
         return _status_out(store, out, "invoice", _invoice_summary)
     if a == "void":
-        out = docs.invoice_void(store, args.id, args.reason)
+        out = docs.invoice_void(
+            store, args.id, args.reason, owner_confirmed=args.owner_confirmed, confirm_code=args.confirm
+        )
+        inv_id = out["invoice"]["id"]
         _render(store, args, out["invoice"], out)
         if out.get("credit_note"):
             _render(store, args, out["credit_note"], out)
             out["credit_note"] = _slim(store, out["credit_note"])
-        return _status_out(store, out, "invoice", _invoice_summary)
+        out = _status_out(store, out, "invoice", _invoice_summary)
+        if out.get("already_void"):
+            out["summary"] = f"{inv_id} was already void; nothing changed. " + out["summary"]
+        return out
     if a == "delete":
         return docs.invoice_delete(store, args.id)
     raise JTPError("Unknown invoice action.")
@@ -868,13 +890,25 @@ def cmd_credit(store, args):
         if not args.invoice:
             raise JTPError("Say which invoice to credit.", hint="jtp credit create --invoice INV-0003 --amount 50")
         out = docs.credit_create(
-            store, args.invoice, spec=_spec(args.spec), amount=args.amount, reason=args.reason, dry_run=args.dry_run
+            store,
+            args.invoice,
+            spec=_spec(args.spec),
+            amount=args.amount,
+            reason=args.reason,
+            dry_run=args.dry_run,
+            owner_confirmed=args.owner_confirmed,
+            confirm_code=args.confirm,
         )
         out["summary"] = ("Preview only, nothing saved. " if args.dry_run else "") + _credit_summary(
             store, out["credit_note"]
         )
         _render(store, args, out["credit_note"], out)
-        if not args.dry_run:
+        if args.dry_run:
+            out["next"] = (
+                "Making it asks the owner first: run this again without --dry-run. It returns the question (ask_owner) "
+                "and its code"
+            )
+        else:
             invoice = store.doc(args.invoice, "invoice")
             _render(store, args, invoice, out)
             out["invoice_summary"] = _invoice_summary(store, invoice)
@@ -1341,7 +1375,9 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         p.add_argument(flag, help=FLAG_HELP.get(flag))
     p.add_argument("--days", type=int)
-    p.add_argument("--dry-run", action="store_true", help="Price it without saving (writes previews/PREVIEW.pdf)")
+    p.add_argument(
+        "--dry-run", action="store_true", help="Create: price it without saving (writes previews/PREVIEW.pdf)"
+    )
     p.add_argument("--with", dest="with_quote", help="The quote that replaced this one (supersede)")
     p.add_argument("--as-spec", action="store_true", help="Show as an editable spec")
 
@@ -1361,7 +1397,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", nargs="?")
     for flag in ("--job", "--spec", "--channel", "--to", "--by", "--method", "--note", "--reason", "--date"):
         p.add_argument(flag, help=FLAG_HELP.get(flag))
-    p.add_argument("--dry-run", action="store_true", help="Preview it (previews/PREVIEW.pdf) without saving")
+    p.add_argument("--dry-run", action="store_true", help="Create: preview it (previews/PREVIEW.pdf) without saving")
 
     p = _add(
         sub,
@@ -1378,7 +1414,7 @@ def build_parser() -> argparse.ArgumentParser:
             "jtp invoice mark-sent INV-0001 --channel email --to jane@example.com",
             "jtp invoice set INV-0001 --payment-link https://buy.stripe.com/...",
             "jtp invoice list --status overdue",
-            "jtp invoice void INV-0001 --reason 'Billed wrong customer'",
+            "jtp invoice void INV-0001 --reason 'Billed wrong customer'   (returns the owner's question and its code)",
         ],
         cmd_invoice,
     )
@@ -1414,11 +1450,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--owner-confirmed",
         metavar="WORDS",
-        help="Issue: the owner's own words confirming the estimated figures (kept on the invoice); only a plain yes "
-        "counts",
+        help="Issue (estimated figures) and void: the owner's own words (kept on the invoice); only a plain yes counts",
     )
-    p.add_argument("--confirm", metavar="CODE", help="Issue: the code that came with the owner's question (confirm)")
-    p.add_argument("--dry-run", action="store_true", help="Preview it (previews/PREVIEW.pdf) without saving")
+    p.add_argument(
+        "--confirm", metavar="CODE", help="Issue and void: the code that came with the owner's question (confirm)"
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="Create and issue: preview it (previews/PREVIEW.pdf) without saving"
+    )
     p.add_argument("--as-spec", action="store_true")
 
     p = _add(
@@ -1426,8 +1465,11 @@ def build_parser() -> argparse.ArgumentParser:
         "credit",
         "Credit notes: the proper way to correct an issued invoice.",
         [
-            'jtp credit create --invoice INV-0003 --amount 50 --reason "Goodwill discount"',
-            "jtp credit create --invoice INV-0003 --spec credit.json",
+            'jtp credit create --invoice INV-0003 --amount 50 --reason "Goodwill discount"   (returns the owner\'s '
+            "question and its code)",
+            'jtp credit create --invoice INV-0003 --amount 50 --reason "Goodwill discount" --owner-confirmed "yes" '
+            "--confirm 1c5e2a0-8d41f2-3f9b27d41c",
+            "jtp credit create --invoice INV-0003 --spec credit.json --dry-run",
             "jtp credit mark-sent CN-0001 --channel email --to jane@example.com",
             "jtp credit show CN-0001",
         ],
@@ -1437,7 +1479,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", nargs="?")
     for flag in ("--invoice", "--amount", "--reason", "--spec", "--channel", "--to", "--date"):
         p.add_argument(flag, help=FLAG_HELP.get(flag))
-    p.add_argument("--dry-run", action="store_true", help="Preview it (previews/PREVIEW.pdf) without saving")
+    p.add_argument(
+        "--owner-confirmed",
+        metavar="WORDS",
+        help="The owner's own words approving it (kept on it); only a plain yes counts",
+    )
+    p.add_argument("--confirm", metavar="CODE", help="The code that came with the owner's question (confirm)")
+    p.add_argument("--dry-run", action="store_true", help="Create: preview it (previews/PREVIEW.pdf) without saving")
 
     p = _add(
         sub,
@@ -1575,6 +1623,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 NO_PROFILE_NEEDED = {"init", "doctor", "demo", "selftest"}
+# The actions that can preview without saving. Any other action that changes something refuses --dry-run, rather
+# than going ahead for real (an independent review found `invoice issue --dry-run` issuing).
+DRY_RUN_ACTIONS = {"quote": ("create",), "co": ("create",), "invoice": ("create", "issue"), "credit": ("create",)}
 READ_ONLY = {"doctor", "selftest", "brief", "report", "search", "price", "render"}
 
 
@@ -1592,6 +1643,13 @@ def main(argv=None) -> None:
             args.invoice = args.id_or_invoice
     store = _store(args)
     try:
+        previews = DRY_RUN_ACTIONS.get(args.command, ()) + ("show", "list")
+        if getattr(args, "dry_run", False) and args.action not in previews:
+            raise JTPError(
+                f"--dry-run doesn't work with {args.command} {args.action}, so nothing was done.",
+                hint="It previews " + ", ".join(f"{c} {a}" for c, acts in DRY_RUN_ACTIONS.items() for a in acts) + ".",
+                code="usage",
+            )
         if args.command not in NO_PROFILE_NEEDED:
             store.require()
         if args.command in ("doctor", "selftest", "demo") or args.command in READ_ONLY:

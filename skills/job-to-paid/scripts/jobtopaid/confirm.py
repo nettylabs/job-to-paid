@@ -113,6 +113,11 @@ def use(home: Path, code) -> None:
     write_json(Path(home) / USED_FILE, used)
 
 
+def reads_as_no(text) -> bool:
+    """Whether an answer says no anywhere in it ("absolutely not", "yes, but not yet")."""
+    return bool(_NO.search(_fold(text)))
+
+
 def _words(text: str):
     """The answer as words, or None when it holds anything but words, commas, full stops and exclamation marks (an
     emoji, a question mark, brackets, a dash, an ellipsis)."""
@@ -162,7 +167,7 @@ def owner_yes(home: Path, action: str, question: str, words, code, *, why: str, 
 
     if not text:
         raise ask(why, hint, ask_code)
-    if _NO.search(_fold(text)):
+    if reads_as_no(text):
         raise JTPError("The owner's answer reads as a no, so nothing was changed.",
                         hint="Tell them it wasn't done. If they change their mind, ask the question afresh.",
                         code="owner_declined")  # fmt: skip

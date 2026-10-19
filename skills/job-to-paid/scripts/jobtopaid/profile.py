@@ -7,6 +7,7 @@ date formats, paper size, document wording) lives here, set once during setup.
 from __future__ import annotations
 
 import copy
+import re
 
 from .money import CURRENCY_DEFAULTS, PRICED_KINDS
 from .util import JTPError, to_decimal
@@ -249,6 +250,51 @@ def validate(profile: dict) -> list:
     if profile["locale"].get("show_currency_code", "auto") not in ("auto", "always", "never"):
         errors.append("locale.show_currency_code must be auto, always or never.")
     return errors
+
+
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_PHONE = re.compile(r"\+?\(?\d[\d ().-]{5,}\d")
+
+
+def follow_contact(profile: dict, key: str, old, new) -> tuple:
+    """After business.email or business.phone changes, payment instructions that gave the old one give the new one.
+    Returns (the names of the methods changed, warnings): other email addresses left in the instructions are named,
+    since only the owner knows if those changed too (a separate address for e-Transfers, say)."""
+    old, new = str(old or "").strip(), str(new or "").strip()
+    changed, warnings = [], []
+    if key not in ("business.email", "business.phone") or not old or not new or old == new:
+        return changed, warnings
+    swap = _swap_email if key == "business.email" else _swap_phone
+    for method in profile["payment"].get("methods") or []:
+        text = method.get("instructions")
+        if isinstance(text, str) and swap(text, old, new) != text:
+            method["instructions"] = swap(text, old, new)
+            changed.append(method.get("name") or "a payment method")
+        others = sorted({e for e in _EMAIL.findall(str(method.get("instructions") or "")) if e.lower() != new.lower()})
+        if key == "business.email" and others:
+            warnings.append(
+                f"The payment instructions for {method.get('name') or 'a payment method'} still give "
+                f"{', '.join(others)}. If that changed too, update them: jtp profile set payment.methods '<json>'"
+            )
+    return changed, warnings
+
+
+def _swap_email(text: str, old: str, new: str) -> str:
+    return re.sub(r"(?<![\w.+-])" + re.escape(old) + r"(?![\w-]|\.\w)", lambda _: new, text, flags=re.IGNORECASE)
+
+
+def _swap_phone(text: str, old: str, new: str) -> str:
+    """The old number, as it was typed or written another way ("+1 604 555 0100", "(604) 555-0100"), becomes the new
+    one. Other numbers (an account number, a date) stay as they are."""
+    digits = re.sub(r"\D", "", old)
+
+    def swap(match):
+        found = re.sub(r"\D", "", match.group())
+        long_enough = min(len(found), len(digits)) >= 7
+        same = found == digits or (long_enough and (digits.endswith(found) or found.endswith(digits)))
+        return new if same else match.group()
+
+    return _PHONE.sub(swap, text)
 
 
 def check(profile: dict) -> dict:

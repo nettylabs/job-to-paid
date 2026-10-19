@@ -15,11 +15,11 @@
 orders comes to exactly what the customer agreed to, and the last progress invoice bills exactly what's
 left, tax included. Never adjust totals by hand.
 
-**Estimates:** lines that were estimates on the quote stay marked "(estimate)" on the draft, and
-`invoice issue` refuses until the owner confirms them, returning the exact question to ask (`ask_owner`)
-and a one-time code (`confirm`). Ask it word for word and wait. If a figure changed, fix the line with
-`invoice update` and issue again: the old answer no longer counts, because the question names the
-figures. If the owner says yes, issue with `--owner-confirmed "<their exact words>" --confirm <code>`.
+**Estimates:** lines that were estimates on the quote stay marked "(estimate)" on the draft, also
+after `invoice update`, and `invoice issue` refuses until the owner confirms them, returning the exact
+question to ask (`ask_owner`) and a one-time code (`confirm`). Ask it word for word and wait. If a figure
+changed, fix the line with `invoice update` and issue again: the old answer no longer counts, because the
+question names the figures. Only the owner's yes when issuing clears an estimate. If the owner says yes, issue with `--owner-confirmed "<their exact words>" --confirm <code>`.
 Only a plain yes as the whole answer counts ("yes", "yes, they're final"); "ok", "sure", an emoji or a
 yes with a condition is refused (`unclear_answer`), so ask again, and a no stops it (`owner_declined`).
 Their reply is kept on the invoice and in the activity log, so the owner can always see who confirmed
@@ -42,10 +42,13 @@ needs a formal invoice for the deposit itself (some tax systems do).
    fixes need a credit note, so get their OK first. Fix a draft if needed:
    `jtp invoice show INV-0012 --as-spec > inv.json`, edit, then
    `jtp invoice update INV-0012 --spec inv.json`. Drafts that shouldn't exist:
-   `jtp invoice delete INV-0012` works for the newest one; otherwise `jtp invoice void`.
+   `jtp invoice delete INV-0012` works for the newest one; otherwise `jtp invoice void` (which asks
+   the owner first).
 4. **Issue** once the owner is happy: `jtp invoice issue INV-0012` sets the date and due date,
    locks it, applies held deposits, and makes the final PDF. Options: `--date`, `--due-days 0`
-   (due on receipt), `--due-date 2026-11-30`.
+   (due on receipt), `--due-date 2026-11-30`. `--dry-run` shows the issued invoice (and the owner's
+   question, if there is one) without issuing it. If it was already issued, it says so and changes
+   nothing.
 5. **Payment link** (if Stripe or Square is connected, see integrations.md): create a link for the
    balance, then `jtp invoice set INV-0012 --payment-link https://...`. The PDF gets a "Pay online"
    button.
@@ -62,12 +65,14 @@ Issued invoices are locked, which is how real books work.
 - **Price wrong, goodwill discount, returned part**:
   `jtp credit create --invoice INV-0012 --amount 50 --reason "Goodwill: took longer than planned"`.
   The amount includes tax, and the toolkit splits it correctly across tax rates. Or pass exact
-  lines with `--spec`. Preview first with `--dry-run`. If the invoice was already paid, the output
-  says a refund is due. Send the credit note to the customer like an invoice (messages.md, "Credit
+  lines with `--spec`. Preview first with `--dry-run`. Making it asks the owner first, the same way as
+  estimates: the output has the question (`ask_owner`) and a code (`confirm`), and only their plain yes,
+  sent back with `--owner-confirmed "<their exact words>" --confirm <code>`, makes the credit note. If
+  the invoice was already paid, the output says a refund is due. Send the credit note to the customer like an invoice (messages.md, "Credit
   note"), then record it: `jtp credit mark-sent CN-0003 --channel email --to jane@example.com`.
   An invoice fully cancelled by a credit note shows as `credited`, not paid.
 - **Whole invoice wrong** (wrong customer, duplicate): `jtp invoice void INV-0012 --reason "..."`.
-  An issued invoice gets a full credit note. Anything billed on it (time, materials, change orders)
+  It can't be undone, so it asks the owner first, the same way. An issued invoice gets a full credit note. Anything billed on it (time, materials, change orders)
   becomes billable again. Invoices with payments can't be voided until the payments are moved
   (`jtp payment undo PAY-0009`) or refunded.
 

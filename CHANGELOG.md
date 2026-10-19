@@ -2,13 +2,26 @@
 
 ## 1.0.1 (2026-10-18)
 
-Fixes from an independent review.
+Fixes from two rounds of an independent review.
 
-- **Only the owner's plain yes counts.** Issuing an invoice that still has estimated figures asks the owner the
-  exact question and returns a one-time code. It goes ahead only when their whole reply is a plain yes ("yes",
-  "yes, they're final") and comes back with that code. "ok", "k", "sure", a thumbs-up, "yes jk", "yeah right" or
-  "yes, next week" is asked again; "absolutely not" stops it. The code is tied to that invoice and those
-  figures, so a changed figure is asked about afresh, and it works once.
+- **Only the owner's plain yes counts.** Issuing an invoice that has estimated figures asks the owner the exact
+  question and returns a one-time code. It goes ahead only when their whole reply is a plain yes ("yes", "yes,
+  they're final") and comes back with that code. "ok", "k", "sure", a thumbs-up, "yes jk", "yeah right", "that's
+  right" on its own or "yes, next week" is asked again; "absolutely not" stops it. The code is tied to that invoice
+  and those figures, so a changed figure is asked about afresh, and it works once. Editing the invoice can't take
+  an estimate off: it stays marked until the owner's yes.
+- **Voiding an invoice and making a credit note ask the owner first**, the same way, since neither can be undone.
+- **A no is never reported as success.** A no on an invoice that's already issued (or void) says so and changes
+  nothing, instead of answering ok.
+- **Dry runs change nothing.** `invoice issue --dry-run` shows the issued invoice and the owner's question without
+  issuing it or using up a code. Commands that can't preview now refuse `--dry-run` instead of going ahead.
+- **A price book item keeps its kind.** A permit (a fee) on a line marked material is billed and taxed as a fee,
+  with a warning.
+- **Payment instructions follow your contact details.** A new business phone number or email replaces the old one
+  in the payment instructions, and any other address they still give is named.
+- **The money brief names every open invoice** with its due date, overdue first (the first 10, then a count).
+- **Chat totals show the currency code** where the symbol is shared ("$126.00 CAD"), the same as the PDFs.
+- **The demo sets its town's time zone**, so "today" is the demo's day.
 - **The terms never sit on a page of their own.** When a quote's or invoice's terms don't fit under the last box
   (acceptance or payment), that box moves to the next page with them. The demo's good/better/best quote on
   Letter paper no longer ends with a page holding only the terms.
@@ -18,7 +31,7 @@ Fixes from an independent review.
 - `jtp pricebook import items.csv`, as its example shows it, no longer crashes (the file name went to the wrong
   place).
 - The agent no longer suggests searching the home folder for the toolkit.
-- 56 automated tests on Python 3.9, 3.11 and 3.13.
+- 68 automated tests on Python 3.9, 3.11 and 3.13, and a 30-check self-test.
 
 ## 1.0.0 (2026-10-15)
 

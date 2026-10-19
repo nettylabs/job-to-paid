@@ -12,7 +12,7 @@ from pathlib import Path
 from . import profile as profile_mod
 from .documents import invoice_state, log_entry_specs, priced
 from .followups import due_actions
-from .money import HUNDRED, ZERO, compute_totals, format_money, q
+from .money import HUNDRED, ZERO, compute_totals, format_total, q
 from .pricing import cost_before_tax, normalize_lines
 from .util import JTPError, from_iso, iso, parse_date, to_decimal, trim_decimal
 
@@ -43,7 +43,7 @@ ACTION_WORDS = {
 
 
 def _fmt(store, value) -> str:
-    return format_money(to_decimal(value), store.money())
+    return format_total(to_decimal(value), store.money())
 
 
 def _period(store, start, end, default_days=None) -> tuple:
@@ -287,6 +287,9 @@ def customer_summary(store, customer_id: str) -> dict:
 # ------------------------------------------------------------------ brief
 
 
+BRIEF_INVOICES = 10  # open invoices named in the brief's text; the rest are counted, and all are in "owed"
+
+
 def brief(store, day=None) -> dict:
     day = day or store.today()
     disp_fmt = lambda v: _fmt(store, v)  # noqa: E731
@@ -311,7 +314,7 @@ def brief(store, day=None) -> dict:
         if state.get("overdue"):
             overdue_total += state["balance"]
         open_invoices.append(row)
-    open_invoices.sort(key=lambda r: -r["days_overdue"])
+    open_invoices.sort(key=lambda r: (-r["days_overdue"], r["due_date"] or ""))  # overdue first, then soonest due
     overdue = [r for r in open_invoices if r["days_overdue"] > 0]
 
     quotes_waiting = []
@@ -424,10 +427,14 @@ def brief(store, day=None) -> dict:
         )
     else:
         lines.append("Owed to you: nothing outstanding")
-    for row in overdue[:3]:
-        lines.append(
-            f"  - {row['id']} {row['customer']}: {row['balance']}, {_plural(row['days_overdue'], 'day')} overdue"
-        )
+    for row in open_invoices[:BRIEF_INVOICES]:
+        if row["days_overdue"]:
+            when = f"{_plural(row['days_overdue'], 'day')} overdue (due {row['due_date_display']})"
+        else:
+            when = "due today" if row["due_date"] == iso(day) else f"due {row['due_date_display']}"
+        lines.append(f"  - {row['id']} {row['customer']}: {row['balance']}, {when}")
+    if len(open_invoices) > BRIEF_INVOICES:
+        lines.append(f"  - and {len(open_invoices) - BRIEF_INVOICES} more: jtp invoice list")
     if quotes_waiting:
         lines.append(f"Quotes waiting on customers: {len(quotes_waiting)}, worth {disp_fmt(waiting_total)}")
         for row in quotes_waiting:
@@ -473,6 +480,7 @@ def brief(store, day=None) -> dict:
             "count": len(open_invoices),
             "overdue_total": disp_fmt(overdue_total),
             "overdue": overdue,
+            "open": open_invoices,
         },
         "quotes_waiting": quotes_waiting,
         "quotes_waiting_total": disp_fmt(waiting_total),

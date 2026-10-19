@@ -12,8 +12,8 @@ from pathlib import Path
 from . import confirm
 from . import documents as docs
 from . import followups, records, reports
-from .money import compute_totals
-from .profile import new_profile
+from .money import compute_totals, currency_display, format_total
+from .profile import follow_contact, new_profile
 from .render import render_doc, render_receipt
 from .store import Store
 from .util import JTPError, iso, write_json
@@ -37,6 +37,7 @@ DEMO_REGIONS = {
             "Bank transfer",
             "Demo Bank, routing 000000000, account 12345678. Please use {number} as the reference.",
         ),
+        "timezone": "America/Chicago",
     },
     "CAD": {  # British Columbia: GST on everything, PST on materials and equipment
         "business": (["100 Example Street", "Vancouver BC V6B 1A1"], "+1 604 555 0100"),
@@ -54,6 +55,7 @@ DEMO_REGIONS = {
             {"code": "PST", "name": "PST", "rate": "7", "applies_to": ["material", "equipment"]},
         ],
         "bank": ("Interac e-Transfer", "Send to pay@demo-plumbing.example and put {number} in the message."),
+        "timezone": "America/Vancouver",
     },
     "GBP": {
         "business": (["100 Example Street", "London E1 6AN"], "+44 20 7946 0100"),
@@ -65,6 +67,7 @@ DEMO_REGIONS = {
         "registration": [{"label": "VAT reg. no.", "value": "GB 123 4567 89"}],
         "taxes": [{"code": "VAT", "name": "VAT", "rate": "20", "applies_to": EVERY_KIND}],
         "bank": ("Bank transfer", "Sort code 00-00-00, account 12345678. Please use {number} as the reference."),
+        "timezone": "Europe/London",
     },
     "AUD": {
         "business": (["100 Example Street", "Sydney NSW 2000"], "+61 2 5550 0100"),
@@ -77,6 +80,7 @@ DEMO_REGIONS = {
         "taxes": [{"code": "GST", "name": "GST", "rate": "10", "applies_to": EVERY_KIND}],
         "bank": ("Bank transfer", "BSB 000-000, account 12345678. Please use {number} as the reference."),
         "labels": {"invoice": "Tax Invoice"},
+        "timezone": "Australia/Sydney",
     },
 }
 GENERIC_REGION = {
@@ -89,6 +93,7 @@ GENERIC_REGION = {
     "registration": [{"label": "Tax reg. no.", "value": "DEMO-123456"}],
     "taxes": [{"code": "TAX", "name": "Sales tax", "rate": "5", "applies_to": EVERY_KIND}],
     "bank": ("Bank transfer", "Demo Bank, account 12345678. Please use {number} as the reference."),
+    "timezone": "UTC",
 }
 
 
@@ -119,6 +124,7 @@ def demo_profile(currency: str = "USD") -> dict:
     }
     if region.get("labels"):
         profile["labels"] = dict(region["labels"])
+    profile["locale"]["timezone"] = region["timezone"]  # "today" is the demo town's day, not the computer's
     profile["rates"].update(
         {
             "labour": [
@@ -331,6 +337,25 @@ def seed(store: Store, currency: str = "USD", history: bool = True) -> dict:
 # ----------------------------------------------------------------- selftest
 
 
+def _with_owners_yes(action, *args, **kwargs):
+    """Run an action that waits for the owner's yes, answering "yes" to its question as the demo's owner."""
+    try:
+        return action(*args, **kwargs)
+    except JTPError as exc:
+        if exc.code != "needs_owner" or not getattr(exc, "confirm", None):
+            raise
+        return action(*args, owner_confirmed="yes", confirm_code=exc.confirm, **kwargs)
+
+
+def _refusal(action, *args, **kwargs):
+    """The code an action refuses with, or None if it went ahead."""
+    try:
+        action(*args, **kwargs)
+    except JTPError as exc:
+        return exc.code
+    return None
+
+
 def selftest() -> dict:
     checks = []
 
@@ -448,7 +473,7 @@ def selftest() -> dict:
             docs.invoice_issue(store, final["id"])
             fstate = docs.invoice_state(store.doc(final["id"]), store.today())
             docs.payment_record(store, invoice_id=final["id"], amount="500", method="Card")
-            credit = docs.credit_create(store, final["id"], amount="25.00", reason="Goodwill")
+            credit = _with_owners_yes(docs.credit_create, store, final["id"], amount="25.00", reason="Goodwill")
             check(
                 "credit note lands on the exact amount",
                 credit["credit_note"]["totals"]["total"] == "25.00",
@@ -479,6 +504,50 @@ def selftest() -> dict:
             check("tax report adds up", "TAX" in tax["taxes"], tax)
             export = reports.export(store, "invoices", str(Path(tmp) / "inv.csv"))
             check("CSV export", export["rows"] >= 3, export)
+
+            # The findings of an independent review of 1.0.1, one check each.
+            customer = made["customers"][0]
+            fee = [{"kind": "fee", "description": "Call-out", "unit_price": "89"}]
+            draft = docs.invoice_create(store, customer_id=customer, spec={"lines": [dict(fee[0], estimate=True)]})
+            draft_id = draft["invoice"]["id"]
+            docs.invoice_update(store, draft_id, {"lines": fee})  # the "estimate" mark left out
+            asked = _refusal(docs.invoice_issue, store, draft_id)
+            check("an estimate can't be dropped by editing the invoice: issuing still asks the owner",
+                  asked == "estimates_unconfirmed" and store.doc(draft_id)["status"] == "draft", asked)  # fmt: skip
+            preview = docs.invoice_issue(store, draft_id, dry_run=True)
+            check("issue --dry-run issues nothing and shows the owner's question",
+                  preview.get("dry_run") and preview.get("owner_question") and store.doc(draft_id)["status"] == "draft",
+                  preview.get("invoice", {}).get("status"))  # fmt: skip
+            overdue_id, notes = made["overdue_invoice"], len(store.docs("credit_note"))
+            gates = (_refusal(docs.invoice_void, store, overdue_id, "Test"),
+                     _refusal(docs.credit_create, store, overdue_id, amount="10"))  # fmt: skip
+            check("voiding and credit notes wait for the owner's yes",
+                  gates == ("needs_owner", "needs_owner") and store.doc(overdue_id)["status"] == "issued"
+                  and len(store.docs("credit_note")) == notes, gates)  # fmt: skip
+            declined = _refusal(docs.invoice_issue, store, overdue_id, owner_confirmed="absolutely not")
+            check("a no on an invoice that's already issued isn't reported as issued", declined == "already_issued",
+                  declined)  # fmt: skip
+            permit, _, warned, _ = docs.build_lines(store, [{"kind": "material", "pricebook": "Permit and inspection"}],
+                                                    prefix="T")  # fmt: skip
+            check("a price book fee on a material line stays a fee, with a warning",
+                  permit[0]["kind"] == "fee" and warned, (permit[0]["kind"], warned))  # fmt: skip
+            canada = demo_profile("CAD")
+            moved, _ = follow_contact(canada, "business.phone", canada["business"]["phone"], "+1 604 555 0199")
+            card = canada["payment"]["methods"][-1]["instructions"]
+            check("payment instructions follow a new phone number", moved == ["Card"] and "555 0199" in card, card)
+            soon = docs.invoice_create(store, customer_id=customer, spec={"lines": fee})["invoice"]["id"]
+            docs.invoice_issue(store, soon)
+            brief = reports.brief(store)
+            named = [line.split()[1] for line in brief["text"].splitlines() if line.startswith("  - INV-")]
+            check("the brief names every open invoice with its due date, overdue first",
+                  named == [overdue_id, soon] and all("due " in line for line in brief["text"].splitlines()[2:4]),
+                  brief["text"])  # fmt: skip
+            cad = format_total(Decimal("1234.5"), currency_display({"currency": "CAD"}))
+            check("chat and brief totals show the currency code where the symbol is shared",
+                  cad == "$1,234.50 CAD" and brief["owed"]["total"].endswith(" USD"), (cad, brief["owed"]["total"]))
+            zones = {c: demo_profile(c)["locale"]["timezone"] for c in ("USD", "CAD", "GBP", "AUD", "EUR")}
+            check("the demo sets its town's time zone", all(zones.values()) and zones["CAD"] == "America/Vancouver",
+                  zones)  # fmt: skip
             write_json(Path(tmp) / "ok.json", {"ok": True})
         finally:
             if old_today:
@@ -506,6 +575,9 @@ def selftest() -> dict:
         except JTPError:
             reused = False
         check("each confirmation code works once", not reused)
+        check("\"that's right\" alone isn't a yes; \"yes, that's right\" is",
+              not confirm.plain_yes("that's right", docs.ESTIMATES_FINAL_WORDS)
+              and confirm.plain_yes("yes, that's right", docs.ESTIMATES_FINAL_WORDS))  # fmt: skip
     passed = all(c["ok"] for c in checks)
     return {
         "passed": passed,

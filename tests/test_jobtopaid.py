@@ -24,9 +24,11 @@ from jobtopaid import confirm, pdf  # noqa: E402
 from jobtopaid import documents as docs  # noqa: E402
 from jobtopaid import followups, records, reports  # noqa: E402
 from jobtopaid.demo import demo_profile, seed  # noqa: E402
-from jobtopaid.money import compute_totals, currency_display, format_money  # noqa: E402
+from jobtopaid.money import compute_totals, currency_display, format_money, format_total  # noqa: E402
 from jobtopaid.pdf import _png_decode  # noqa: E402
 from jobtopaid.pricing import lines_as_spec, normalize_lines  # noqa: E402
+from jobtopaid.profile import check as profile_check  # noqa: E402
+from jobtopaid.profile import follow_contact  # noqa: E402
 from jobtopaid.render import render_doc, render_receipt  # noqa: E402
 from jobtopaid.view import build_view  # noqa: E402
 from jobtopaid.store import Store  # noqa: E402
@@ -35,7 +37,20 @@ from jobtopaid.util import JTPError, to_decimal  # noqa: E402
 EVERY = ["labour", "material", "equipment", "subcontract", "fee", "other"]
 # Replies an independent review of 1.0.0 saw count as the owner's yes (any two characters did), and more.
 NOT_A_YES = ["ok", "k", "sure", "fine", "maybe", "?", "👍", "👎", "yes jk", "yeah right", "yes, next week",
-             "yes lol jk", "yes once she pays", "ok yes", "yes...", "yes 👍", "yes, 3 hours is right", "absolutely not"]
+             "yes lol jk", "yes once she pays", "ok yes", "yes...", "yes 👍", "yes, 3 hours is right", "that's right",
+             "absolutely not"]
+
+
+def owner_approves(action, *args, **kwargs):
+    """Run an action that needs the owner's yes the way an agent must: it refuses with the question and a code, and
+    the owner's "yes" goes back with that code."""
+    try:
+        action(*args, **kwargs)
+    except JTPError as exc:
+        if exc.code != "needs_owner" or not (exc.ask_owner and exc.confirm):
+            raise
+        return action(*args, owner_confirmed="yes", confirm_code=exc.confirm, **kwargs)
+    raise AssertionError(f"{action.__name__} went ahead without asking the owner")
 
 
 def totals(lines, taxes, places=2, inclusive=False):
@@ -178,6 +193,33 @@ class PricingTests(StoreCase):
         self.assertEqual(lines[0]["tax_codes"], ["GST"])
         self.assertTrue(warnings)
         self.assertEqual([s["name"] for s in suggestions], ["Pipe"])
+
+    def test_a_price_book_fee_stays_a_fee_on_a_material_line(self):
+        """An independent review: a permit (a fee in the price book) on a line marked material was charged PST
+        too, with no warning."""
+        records.pricebook_add(self.store, {"name": "Permit and inspection", "kind": "fee", "price": "175"})
+        permit = "permit and inspection"
+        specs = [{"kind": "material", "pricebook": permit}, {"pricebook": permit}, {"kind": "fee", "pricebook": permit}]
+        lines, warnings, _ = normalize_lines(self.store.profile(), self.store.pricebook(), specs, 2)
+        self.assertEqual([(ln["kind"], ln["tax_codes"]) for ln in lines], [("fee", ["GST"])] * 3)
+        self.assertEqual([w for w in warnings if "price book lists" in w], [
+            "Line 1: the price book lists Permit and inspection as fee, so it's billed and taxed as fee, not material."
+        ])  # fmt: skip
+
+    def test_contact_changes_reach_the_payment_instructions_and_nothing_else(self):
+        profile = demo_profile("CAD")
+        profile["payment"]["methods"].append({"name": "Cheque", "instructions": (
+            "Questions? (604) 555-0100 or office@demo-plumbing.example. Not backoffice@demo-plumbing.example or "
+            "office@demo-plumbing.example.shop.example. Account 6045550199, ref 2026-10-18.")})  # fmt: skip
+        changed, warnings = follow_contact(profile, "business.phone", "+1 604 555 0100", "+1 604 555 0123")
+        self.assertEqual((changed, warnings), (["Card", "Cheque"], []))
+        changed, warnings = follow_contact(profile, "business.email", "office@demo-plumbing.example", "hi@new.example")
+        self.assertEqual(changed, ["Cheque"])
+        self.assertEqual(profile["payment"]["methods"][-1]["instructions"], (
+            "Questions? +1 604 555 0123 or hi@new.example. Not backoffice@demo-plumbing.example or "
+            "office@demo-plumbing.example.shop.example. Account 6045550199, ref 2026-10-18."))  # fmt: skip
+        self.assertIn("pay@demo-plumbing.example", warnings[0])  # the e-Transfer address: only the owner knows
+        self.assertEqual(follow_contact(profile, "business.name", "A", "B"), ([], []))
 
     def _gst_only(self, inclusive=False, costs_include_tax=False):
         profile = self.store.profile()
@@ -326,7 +368,7 @@ class WorkflowTests(StoreCase):
         records.job_log(self.store, job["id"], "time", {"hours": "2"})
         inv = docs.invoice_create(self.store, job_id=job["id"], tm=True)["invoice"]
         docs.invoice_issue(self.store, inv["id"])
-        out = docs.invoice_void(self.store, inv["id"], "wrong customer")
+        out = owner_approves(docs.invoice_void, self.store, inv["id"], "wrong customer")
         self.assertEqual(out["credit_note"]["totals"]["total"], inv["totals"]["total"])
         self.assertIsNone(self.store.job(job["id"])["log"][0]["invoice"])
         again = docs.invoice_create(self.store, job_id=job["id"], tm=True)["invoice"]
@@ -404,7 +446,8 @@ class WorkflowTests(StoreCase):
 
     def test_full_credit_marks_invoice_credited(self):
         inv = self._issued()
-        credit = docs.credit_create(self.store, inv["id"], amount="105", reason="Cancelled")["credit_note"]
+        credit = owner_approves(docs.credit_create, self.store, inv["id"], amount="105", reason="Cancelled")
+        credit = credit["credit_note"]
         state = docs.invoice_state(self.store.doc(inv["id"]), self.store.today())
         self.assertEqual((state["status"], state["balance"]), ("credited", Decimal("0")))
         sent = docs.credit_mark_sent(self.store, credit["id"], "email", "jane@example.com")
@@ -420,13 +463,13 @@ class WorkflowTests(StoreCase):
         october = reports.tax_report(self.store, "2026-10-01", "2026-10-31", basis="cash")
         november = reports.tax_report(self.store, "2026-11-01", "2026-11-30", basis="cash")
         accrual = reports.tax_report(self.store, "2026-10-01", "2026-10-31")
-        self.assertEqual(october["taxes"]["GST"]["tax_charged"], "$20.00")
-        self.assertEqual(november["taxes"]["GST"]["tax_charged"], "$30.00")
-        self.assertEqual(accrual["taxes"]["GST"]["tax_charged"], "$50.00")
+        self.assertEqual(october["taxes"]["GST"]["tax_charged"], "$20.00 CAD")
+        self.assertEqual(november["taxes"]["GST"]["tax_charged"], "$30.00 CAD")
+        self.assertEqual(accrual["taxes"]["GST"]["tax_charged"], "$50.00 CAD")
 
     def test_exports_include_credit_notes(self):
         inv = self._issued()
-        docs.credit_create(self.store, inv["id"], amount="21", reason="Goodwill")
+        owner_approves(docs.credit_create, self.store, inv["id"], amount="21", reason="Goodwill")
         with open(reports.export(self.store, "invoices", None)["file"], encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         credit = [r for r in rows if r["type"] == "credit_note"]
@@ -582,7 +625,8 @@ class WorkflowTests(StoreCase):
             if reply != "absolutely not":
                 self.assertTrue(caught.exception.ask_owner and caught.exception.confirm)  # asked again, with a code
         self.assertEqual(self.store.doc(inv_id)["status"], "draft")
-        for reply in ("yes", "Yep!", "Yes, they're final.", "yes, issue it", "yes please", "go ahead"):
+        for reply in ("yes", "Yep!", "Yes, they're final.", "yes, issue it", "yes please", "go ahead",
+                      "yes, that's right"):
             self.assertTrue(confirm.plain_yes(reply, docs.ESTIMATES_FINAL_WORDS), reply)
         self.assertEqual(docs.invoice_issue(self.store, inv_id, owner_confirmed="yes",
                                             confirm_code=code)["invoice"]["status"], "issued")  # fmt: skip
@@ -613,13 +657,147 @@ class WorkflowTests(StoreCase):
             confirm.owner_yes(self.store.home, "invoice.issue|INV-9999|x", "Final?", "yes", code, why="")
         self.assertIn("already used", caught.exception.message)
 
+    def test_an_estimate_cant_be_dropped_by_editing_the_invoice(self):
+        """An independent review of 1.0.1: taking "estimate" off the lines with invoice update let the invoice issue
+        with no question, no code and nothing recorded, and the hint said to do it."""
+        inv_id = self._estimate_invoice()
+        inv = self.store.doc(inv_id)
+        spec = {"title": inv["title"], "lines": lines_as_spec(inv["lines"])}
+        for line in spec["lines"]:
+            line.pop("estimate", None)
+        out = docs.invoice_update(self.store, inv_id, spec)
+        self.assertIn('Kept "(estimate)" on Install', " ".join(out["warnings"]))
+        asked = self._asked(inv_id)
+        self.assertIn("Install: 3 hr", asked.ask_owner)
+        self.assertNotIn('remove "estimate"', asked.hint)
+        spec["lines"][0]["description"] = "Install and test"  # a renamed line loses its mark; the invoice remembers
+        docs.invoice_update(self.store, inv_id, spec)
+        self.assertFalse([ln for ln in self.store.doc(inv_id)["lines"] if ln.get("estimate")])
+        asked = self._asked(inv_id)
+        self.assertIn("Install and test: 3 hr", asked.ask_owner)  # with no line marked, every figure is named
+        self.assertIn("Call-out", asked.ask_owner)
+        issued = docs.invoice_issue(self.store, inv_id, owner_confirmed="yes", confirm_code=asked.confirm)["invoice"]
+        self.assertEqual((issued["status"], issued["estimates_confirmed"]["owner_said"]), ("issued", "yes"))
+
+    def test_a_dry_run_issues_nothing(self):
+        """An independent review of 1.0.1: invoice issue --dry-run issued the invoice and used up the owner's code."""
+        spec = {"title": "A", "lines": [{"kind": "fee", "description": "Work", "unit_price": "100"}]}
+        inv_id = docs.invoice_create(self.store, customer_id=self.cust["id"], spec=spec)["invoice"]["id"]
+        preview = docs.invoice_issue(self.store, inv_id, dry_run=True)
+        self.assertEqual((preview["invoice"]["id"], preview["invoice"]["status"], preview["would_issue"]),
+                         ("PREVIEW", "issued", inv_id))  # fmt: skip
+        self.assertEqual(self.store.doc(inv_id)["status"], "draft")
+        estimated = self._estimate_invoice()
+        code = self._asked(estimated).confirm
+        preview = docs.invoice_issue(self.store, estimated, owner_confirmed="yes", confirm_code=code, dry_run=True)
+        self.assertIn("Are they final?", preview["owner_question"])
+        self.assertEqual(self.store.doc(estimated)["status"], "draft")
+        self.assertFalse((self.store.home / confirm.USED_FILE).exists())  # the code wasn't used up
+        issued = docs.invoice_issue(self.store, estimated, owner_confirmed="yes", confirm_code=code)["invoice"]
+        self.assertEqual(issued["status"], "issued")
+
+    def test_void_and_credit_notes_wait_for_the_owners_yes(self):
+        """An independent review of 1.0.1: invoice void and credit create went ahead with no question, and neither
+        can be undone."""
+        inv = self._issued()
+        with self.assertRaises(JTPError) as caught:
+            docs.invoice_void(self.store, inv["id"], "Wrong customer")
+        asked = caught.exception
+        self.assertEqual(asked.code, "needs_owner")
+        self.assertEqual(asked.ask_owner, f"Void invoice {inv['id']} for Jane Doe ($105.00 CAD)? A credit note for "
+                         "$105.00 CAD goes with it. Reason: Wrong customer. This can't be undone.")  # fmt: skip
+        for reply, code, refused in (("ok", asked.confirm, "unclear_answer"), ("no", asked.confirm, "owner_declined"),
+                                     ("yes", None, "needs_owner")):  # fmt: skip
+            with self.subTest(reply=reply), self.assertRaises(JTPError) as caught:
+                docs.invoice_void(self.store, inv["id"], "Wrong customer", owner_confirmed=reply, confirm_code=code)
+            self.assertEqual(caught.exception.code, refused)
+        with self.assertRaises(JTPError):  # the code covers that reason: another reason is another question
+            docs.invoice_void(self.store, inv["id"], "Duplicate", owner_confirmed="yes", confirm_code=asked.confirm)
+        self.assertEqual((self.store.doc(inv["id"])["status"], self.store.docs("credit_note")), ("issued", []))
+        out = docs.invoice_void(self.store, inv["id"], "Wrong customer", owner_confirmed="yes, void it",
+                                confirm_code=asked.confirm)  # fmt: skip
+        self.assertEqual(out["invoice"]["void_approved"]["owner_said"], "yes, void it")
+        with self.assertRaises(JTPError) as caught:
+            docs.invoice_void(self.store, inv["id"], "Wrong customer", owner_confirmed="no")
+        self.assertEqual(caught.exception.code, "already_void")
+        self.assertEqual((out["credit_note"]["id"], out["credit_note"]["owner_approved"]["owner_said"]),
+                         ("CN-0001", "yes, void it"))  # asking used up no number  # fmt: skip
+        other = self._issued("50")
+        with self.assertRaises(JTPError) as caught:
+            docs.credit_create(self.store, other["id"], amount="10", reason="Goodwill")
+        asked = caught.exception
+        self.assertEqual(asked.ask_owner, f"Issue a credit note for $10.00 CAD on invoice {other['id']} for Jane Doe? "
+                         "Reason: Goodwill. This can't be undone.")  # fmt: skip
+        preview = docs.credit_create(self.store, other["id"], amount="10", reason="Goodwill", dry_run=True)
+        self.assertEqual((preview["owner_question"], len(self.store.docs("credit_note"))), (asked.ask_owner, 1))
+        with self.assertRaises(JTPError):  # a yes to $10 doesn't cover $20
+            docs.credit_create(self.store, other["id"], amount="20", reason="Goodwill", owner_confirmed="yes",
+                               confirm_code=asked.confirm)  # fmt: skip
+        credit = docs.credit_create(self.store, other["id"], amount="10", reason="Goodwill",
+                                    owner_confirmed="yes, issue it", confirm_code=asked.confirm)["credit_note"]
+        self.assertEqual((credit["id"], credit["owner_approved"]["owner_said"]), ("CN-0002", "yes, issue it"))
+        draft = docs.invoice_create(self.store, customer_id=self.cust["id"], spec={"title": "D", "lines": [
+            {"kind": "fee", "description": "Work", "unit_price": "1"}]})["invoice"]  # fmt: skip
+        with self.assertRaises(JTPError) as caught:
+            docs.invoice_void(self.store, draft["id"], None)
+        self.assertTrue(caught.exception.ask_owner.startswith(f"Void draft invoice {draft['id']}"))
+
+    def test_a_no_on_an_issued_invoice_isnt_reported_as_issued(self):
+        """An independent review of 1.0.1: issuing an issued invoice again with "absolutely not" answered ok, and
+        the CLI kept the owner's earlier words as if they were this answer."""
+        inv = self._issued()
+        with self.assertRaises(JTPError) as caught:
+            docs.invoice_issue(self.store, inv["id"], owner_confirmed="absolutely not")
+        self.assertEqual(caught.exception.code, "already_issued")
+        self.assertIn("Nothing was changed", caught.exception.message)
+        self.assertTrue(docs.invoice_issue(self.store, inv["id"])["already_issued"])
+
+    def _open_invoice(self, amount, **issue):
+        spec = {"title": "A", "lines": [{"kind": "fee", "description": "Work", "unit_price": amount}]}
+        inv = docs.invoice_create(self.store, customer_id=self.cust["id"], spec=spec)["invoice"]
+        return docs.invoice_issue(self.store, inv["id"], **issue)["invoice"]["id"]
+
+    def test_the_brief_names_every_open_invoice_overdue_first(self):
+        """An independent review: "Owed to you: ... on 2 invoices" named only the overdue one."""
+        later = self._open_invoice("30", due_days=30)
+        late = self._open_invoice("10", date="2026-09-01")
+        soon = self._open_invoice("20", due_days=7)
+        today = self._open_invoice("40", due_days=0)
+        text = reports.brief(self.store)["text"].splitlines()
+        day = lambda iso_day: reports._day(self.store, iso_day)  # noqa: E731
+        self.assertEqual(text[1], "Owed to you: $105.00 CAD on 4 invoices, $10.50 CAD overdue on 1")
+        self.assertEqual(text[2:6], [f"  - {late} Jane Doe: $10.50 CAD, 30 days overdue (due {day('2026-09-15')})",
+                                     f"  - {today} Jane Doe: $42.00 CAD, due today",
+                                     f"  - {soon} Jane Doe: $21.00 CAD, due {day('2026-10-22')}",
+                                     f"  - {later} Jane Doe: $31.50 CAD, due {day('2026-11-14')}"])  # fmt: skip
+        for _ in range(8):
+            self._open_invoice("1")
+        brief = reports.brief(self.store)
+        self.assertIn("  - and 2 more: jtp invoice list", brief["text"].splitlines())
+        self.assertEqual(len(brief["owed"]["open"]), 12)
+
+    def test_chat_totals_show_the_currency_code_where_the_symbol_is_shared(self):
+        """An independent review: the PDFs said "$359.18 CAD", but the chat and the brief said "$359.18"."""
+        self.assertEqual(format_total(Decimal("1234.5"), currency_display({"currency": "CAD"})), "$1,234.50 CAD")
+        never = currency_display({"currency": "CAD", "show_currency_code": "never"})
+        self.assertEqual(format_total(Decimal("1234.5"), never), "$1,234.50")
+        self.assertIn("= $285.00 CAD", self._asked(self._estimate_invoice()).ask_owner)
+
+    def test_the_demo_sets_its_towns_time_zone(self):
+        """An independent review: the demo left the time zone blank, so doctor warned and "today" was the
+        computer's day."""
+        zones = {c: demo_profile(c)["locale"]["timezone"] for c in ("USD", "CAD", "GBP", "AUD", "EUR")}
+        self.assertEqual(zones, {"USD": "America/Chicago", "CAD": "America/Vancouver", "GBP": "Europe/London",
+                                 "AUD": "Australia/Sydney", "EUR": "UTC"})  # fmt: skip
+        self.assertFalse([w for w in profile_check(demo_profile("CAD"))["warnings"] if "time zone" in w])
+
     def test_deposits_count_as_received(self):
         quote = self._fixed_quote([{"kind": "fee", "description": "Work", "unit_price": "1000"}])
         job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
         docs.payment_record(self.store, job_id=job_id, amount="250", method="Bank", deposit=True)
         summary = reports.job_summary(self.store, job_id)
-        self.assertEqual((summary["received"], summary["deposits_held"]), ("$250.00", "$250.00"))
-        self.assertIn("received $250.00", summary["summary"])
+        self.assertEqual((summary["received"], summary["deposits_held"]), ("$250.00 CAD", "$250.00 CAD"))
+        self.assertIn("received $250.00 CAD", summary["summary"])
 
     def test_payment_instructions_name_the_document(self):
         profile = self.store.profile()
@@ -935,9 +1113,11 @@ class CliTests(unittest.TestCase):
             inv_id = out["invoice"]["id"]
             code, out = self.run_cli(home, "invoice", "mark-sent", inv_id, "--channel", "email", "--to", "s@x.example")
             self.assertTrue(Path(out["sent_copy"]).is_file())
-            code, out = self.run_cli(
-                home, "credit", "create", "--invoice", inv_id, "--amount", "12", "--reason", "Oops"
-            )
+            credit = ("credit", "create", "--invoice", inv_id, "--amount", "12", "--reason", "Oops")
+            code, out = self.run_cli(home, *credit)
+            self.assertEqual((code, out["code"]), (1, "needs_owner"))  # a credit note asks the owner first
+            self.assertIn("Issue a credit note for £12.00", out["ask_owner"])
+            code, out = self.run_cli(home, *credit, "--owner-confirmed", "yes", "--confirm", out["confirm"])
             self.assertEqual(code, 0)
             code, out = self.run_cli(home, "credit", "mark-sent", out["credit_note"]["id"], "--channel", "email")
             self.assertEqual((code, out["credit_note"]["sent"][0]["channel"]), (0, "email"))
@@ -965,6 +1145,58 @@ class CliTests(unittest.TestCase):
             code, out = self.run_cli(home, "pricebook", "import", str(Path(tmp) / "missing.csv"))
             self.assertEqual(code, 1)
             self.assertIn("No file", out["error"])
+
+    def test_dry_run_previews_or_refuses(self):
+        """An independent review of 1.0.1: invoice issue --dry-run issued the invoice for real. An action that
+        can't preview now refuses --dry-run rather than going ahead."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo")
+            code, out = self.run_cli(home, "invoice", "create", "--customer", "C-0001", "--spec",
+                                     '[{"kind":"fee","description":"Call-out","unit_price":89}]')  # fmt: skip
+            inv = out["invoice"]["id"]
+            code, out = self.run_cli(home, "invoice", "issue", inv, "--dry-run")
+            self.assertEqual(code, 0)
+            self.assertTrue(out["summary"].startswith(f"Preview only, nothing saved or issued. Invoice {inv} "))
+            self.assertTrue(Path(out["files"]["PREVIEW"]["pdf"]).is_file())
+            for args in (("invoice", "void", inv), ("invoice", "mark-sent", inv, "--channel", "email"),
+                         ("quote", "accept", "Q-0001"), ("co", "approve", "CO-0001"), ("credit", "mark-sent", "CN-1")):
+                code, out = self.run_cli(home, *args, "--dry-run")
+                self.assertEqual((code, out["code"]), (1, "usage"), args)
+            self.assertEqual(self.run_cli(home, "invoice", "show", inv)[1]["invoice"]["status"], "draft")
+
+    def test_issuing_again_says_so_and_a_no_isnt_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo", "--currency", "CAD")
+            code, out = self.run_cli(home, "invoice", "create", "--customer", "C-0001", "--spec",
+                                     '[{"kind":"fee","description":"Call-out","unit_price":89}]')  # fmt: skip
+            inv = out["invoice"]["id"]
+            code, out = self.run_cli(home, "invoice", "issue", inv)
+            self.assertIn("total $93.45 CAD", out["summary"])  # chat totals carry the code, like the PDFs
+            code, out = self.run_cli(home, "invoice", "issue", inv, "--owner-confirmed", "absolutely not")
+            self.assertEqual((code, out["code"]), (1, "already_issued"))
+            code, out = self.run_cli(home, "invoice", "issue", inv, "--owner-confirmed", "yes")
+            self.assertTrue(out["summary"].startswith(f"{inv} was already issued on "), out["summary"])
+            self.assertNotIn("note", out)
+            code, out = self.run_cli(home, "invoice", "void", inv)
+            self.assertEqual((code, out["code"]), (1, "needs_owner"))
+            code, out = self.run_cli(home, "invoice", "void", inv, "--owner-confirmed", "Yes, void it.",
+                                     "--confirm", out["confirm"])  # fmt: skip
+            self.assertEqual((code, out["invoice"]["status"]), (0, "void"))
+
+    def test_payment_instructions_follow_the_business_phone_and_email(self):
+        """An independent review: after a new phone number and email, the payment instructions still gave the old
+        ones, with no warning."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo", "--currency", "CAD")
+            code, out = self.run_cli(home, "profile", "set", "business.phone", "+1 604 555 0199")
+            self.assertEqual((code, out["payment_methods_updated"]), (0, ["Card"]))
+            code, out = self.run_cli(home, "profile", "set", "business.email", "hello@new-plumbing.example")
+            self.assertIn("pay@demo-plumbing.example", " ".join(out["warnings"]))
+            methods = Store(home).profile()["payment"]["methods"]
+            self.assertEqual(methods[1]["instructions"], "Call us on +1 604 555 0199 to pay by card.")
 
     def test_the_owners_yes_takes_two_steps(self):
         """The agent asks the owner the exact question, then sends their words back with the question's code."""

@@ -360,7 +360,7 @@ options:
   --status STATUS       Filter by status
   --tags TAGS           Job-type tags, comma separated (e.g. 'water heater,gas')
   --days DAYS
-  --dry-run             Price it without saving (writes previews/PREVIEW.pdf)
+  --dry-run             Create: price it without saving (writes previews/PREVIEW.pdf)
   --with WITH_QUOTE     The quote that replaced this one (supersede)
   --as-spec             Show as an editable spec
 
@@ -401,7 +401,7 @@ options:
   --note NOTE           Free text kept on record
   --reason REASON       Why (kept on record)
   --date DATE           YYYY-MM-DD, today, yesterday, or +N / -N days (default: today)
-  --dry-run             Preview it (previews/PREVIEW.pdf) without saving
+  --dry-run             Create: preview it (previews/PREVIEW.pdf) without saving
 
 Examples:
   jtp co create --job J-0001 --spec '{"title":"Add shut-off valve","reason":"Old valve seized","lines":[{"kind":"material","pricebook":"PB-0005","qty":1},{"kind":"labour","description":"Swap valve","qty":0.5}]}'
@@ -455,10 +455,10 @@ options:
   --external EXTERNAL   key=value id in another system, e.g. xero=INV-88
   --allow-unconfirmed-tax
   --owner-confirmed WORDS
-                        Issue: the owner's own words confirming the estimated figures (kept on the invoice);
+                        Issue (estimated figures) and void: the owner's own words (kept on the invoice);
                         only a plain yes counts
-  --confirm CODE        Issue: the code that came with the owner's question (confirm)
-  --dry-run             Preview it (previews/PREVIEW.pdf) without saving
+  --confirm CODE        Issue and void: the code that came with the owner's question (confirm)
+  --dry-run             Create and issue: preview it (previews/PREVIEW.pdf) without saving
   --as-spec
 
 Examples:
@@ -472,14 +472,15 @@ Examples:
   jtp invoice mark-sent INV-0001 --channel email --to jane@example.com
   jtp invoice set INV-0001 --payment-link https://buy.stripe.com/...
   jtp invoice list --status overdue
-  jtp invoice void INV-0001 --reason 'Billed wrong customer'
+  jtp invoice void INV-0001 --reason 'Billed wrong customer'   (returns the owner's question and its code)
 ```
 
 ## credit
 
 ```text
 usage: jtp credit [-h] [--invoice INVOICE] [--amount AMOUNT] [--reason REASON] [--spec SPEC]
-                  [--channel CHANNEL] [--to TO] [--date DATE] [--dry-run]
+                  [--channel CHANNEL] [--to TO] [--date DATE] [--owner-confirmed WORDS] [--confirm CODE]
+                  [--dry-run]
                   {create,show,mark-sent} [id]
 
 Credit notes: the proper way to correct an issued invoice.
@@ -497,11 +498,15 @@ options:
   --channel CHANNEL     email, sms, whatsapp, phone, in_person, portal or other
   --to TO               Where it went (email address or phone number)
   --date DATE           YYYY-MM-DD, today, yesterday, or +N / -N days (default: today)
-  --dry-run             Preview it (previews/PREVIEW.pdf) without saving
+  --owner-confirmed WORDS
+                        The owner's own words approving it (kept on it); only a plain yes counts
+  --confirm CODE        The code that came with the owner's question (confirm)
+  --dry-run             Create: preview it (previews/PREVIEW.pdf) without saving
 
 Examples:
-  jtp credit create --invoice INV-0003 --amount 50 --reason "Goodwill discount"
-  jtp credit create --invoice INV-0003 --spec credit.json
+  jtp credit create --invoice INV-0003 --amount 50 --reason "Goodwill discount"   (returns the owner's question and its code)
+  jtp credit create --invoice INV-0003 --amount 50 --reason "Goodwill discount" --owner-confirmed "yes" --confirm 1c5e2a0-8d41f2-3f9b27d41c
+  jtp credit create --invoice INV-0003 --spec credit.json --dry-run
   jtp credit mark-sent CN-0001 --channel email --to jane@example.com
   jtp credit show CN-0001
 ```

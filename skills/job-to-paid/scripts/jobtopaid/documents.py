@@ -23,6 +23,7 @@ from .money import (
     allocate,
     compute_totals,
     format_money,
+    format_total,
     format_qty,
     line_tax_breakdown,
     q,
@@ -38,6 +39,20 @@ INVOICE_STATUSES = ("draft", "issued", "paid", "void")
 CHANNELS = ("email", "sms", "whatsapp", "phone", "in_person", "portal", "other")
 PREVIEW_ID = "PREVIEW"
 SAMPLE_CUSTOMER = "SAMPLE"
+
+
+def customer_label(store, customer_id) -> str:
+    """The customer as the owner knows them: "Company (Name)", or whichever of the two is set."""
+    if customer_id == SAMPLE_CUSTOMER:
+        return "Sample Customer"
+    try:
+        cust = store.customer(customer_id)
+    except JTPError:
+        return customer_id
+    company, name = cust.get("company"), cust.get("name")
+    if company and name and company.lower() != name.lower():
+        return f"{company} ({name})"
+    return name or company or customer_id
 
 
 def priced(lines: list) -> list:
@@ -945,6 +960,8 @@ def invoice_create(
         "snooze": None,
         "created_at": now_stamp(),
     }
+    if any(ln.get("estimate") for ln in lines):
+        doc["had_estimates"] = True  # only the owner's yes when issuing clears this (invoice_issue)
     if not dry_run:
         store.save_doc(doc)
         job["invoices"].append(doc["id"])
@@ -1016,7 +1033,18 @@ def invoice_update(store, ident: str, spec: dict) -> dict:
     warnings, suggestions = [], []
     if spec.get("lines"):
         _link(store, job, inv, attach=False)
+        estimated = {_line_key(ln) for ln in inv["lines"] if ln.get("estimate")}
         inv["lines"], inv["totals"], warnings, suggestions = build_lines(store, spec["lines"], prefix="I")
+        kept = []
+        for ln in inv["lines"]:  # an estimate stays one until the owner confirms it when issuing
+            if _line_key(ln) in estimated and not ln.get("estimate"):
+                ln["estimate"] = True
+                kept.append(ln.get("description") or ln["id"])
+        if kept:
+            warnings.append(f"Kept \"(estimate)\" on {', '.join(kept)}: only the owner's yes when issuing confirms "
+                            "an estimated figure.")  # fmt: skip
+        if estimated or any(ln.get("estimate") for ln in inv["lines"]):
+            inv["had_estimates"] = True
         source = {k: v for k, v in (inv.get("source") or {}).items() if k not in ("log_entries", "change_orders")}
         cos = sorted({(ln.get("source") or {}).get("change_order") for ln in inv["lines"]} - {None})
         logs = sorted({lid for ln in inv["lines"] for lid in ((ln.get("source") or {}).get("log") or [])})
@@ -1033,6 +1061,10 @@ def invoice_update(store, ident: str, spec: dict) -> dict:
     store.save_doc(inv)
     store.log("invoice.update", inv["id"])
     return {"invoice": inv, "warnings": warnings, "pricebook_suggestions": suggestions}
+
+
+def _line_key(line: dict) -> str:
+    return " ".join(str(line.get("description") or "").split()).casefold()
 
 
 def invoice_state(inv: dict, day: _dt.date) -> dict:
@@ -1085,7 +1117,7 @@ def _update_job_after_money(store, job: dict) -> None:
 
 
 def _estimate_figure(ln: dict, disp: dict) -> str:
-    amount = format_money(to_decimal(ln["amount"]), disp)
+    amount = format_total(to_decimal(ln["amount"]), disp)
     if not ln.get("display_qty", True):
         return f"{ln.get('description') or ln['id']}: {amount}"
     qty = f"{format_qty(to_decimal(ln['qty']), disp)} {ln.get('unit') or ''}".strip()
@@ -1100,11 +1132,19 @@ ESTIMATES_FINAL_WORDS = ("final", "they're final", "they are final", "that's rig
 
 def invoice_issue(
     store, ident: str, date=None, due_days=None, due_date=None, allow_unconfirmed_tax=False, owner_confirmed=None,
-    confirm_code=None,
+    confirm_code=None, dry_run=False,
 ) -> dict:
     inv = store.doc(ident, "invoice")
     if inv["status"] != "draft":
         if inv["status"] in ("issued", "paid"):
+            if owner_confirmed and confirm.reads_as_no(owner_confirmed):  # never answer a no with "issued"
+                raise JTPError(
+                    f"{inv['id']} was already issued on {inv['date']}, so the owner's no can't stop it now. Nothing "
+                    "was changed.",
+                    hint=f"To cancel it, void it (jtp invoice void {inv['id']}, which asks the owner first), or "
+                    "correct it with a credit note.",
+                    code="already_issued",
+                )
             return {"invoice": inv, "already_issued": True}
         raise JTPError(f"{inv['id']} is {inv['status']}.")
     profile = store.profile()
@@ -1121,32 +1161,38 @@ def invoice_issue(
             code="setup_needed",
         )
     estimated = [ln for ln in inv["lines"] if ln.get("estimate")]
-    said = ""
-    if estimated:
+    # An invoice that had estimates needs the owner's yes even if the marks were taken off since: only that yes
+    # clears them. If no line is marked any more, the question names every figure.
+    asked_about = estimated or (priced(inv["lines"]) if inv.get("had_estimates") and not inv.get("estimates_confirmed")
+                                else [])  # fmt: skip
+    said, question = "", None
+    if asked_about:
         # Only the owner's plain yes to this exact question counts, sent back with its one-time code. The code
         # covers these figures: if one changes after the owner was asked, they're asked again (confirm.py).
         disp = store.money()
-        figures = "; ".join(_estimate_figure(ln, disp) for ln in estimated)
-        said = confirm.owner_yes(
-            store.home, f"invoice.issue|{inv['id']}|{figures}",
-            f"Before I finalize invoice {inv['id']}: these figures were estimates. Are they final? {figures}",
-            owner_confirmed, confirm_code,
-            why=f"{inv['id']} still has estimated figures. Issuing makes the invoice final, so only the owner can "
-            "confirm them: ask, and wait for their answer.",
-            hint="Ask the owner the question in ask_owner, word for word. Only if they say yes: jtp invoice issue "
-            f'{inv["id"]} --owner-confirmed "<their exact words>" --confirm <the code in confirm> (their words are '
-            f"kept on the invoice). If a figure changed: jtp invoice show {inv['id']} --as-spec > inv.json, fix the "
-            f'line and remove "estimate", then jtp invoice update {inv["id"]} --spec inv.json',
-            ask_code="estimates_unconfirmed",
-            echo=ESTIMATES_FINAL_WORDS,
-        )
+        figures = "; ".join(_estimate_figure(ln, disp) for ln in asked_about)
+        question = f"Before I finalize invoice {inv['id']}: these figures were estimates. Are they final? {figures}"
+        if not dry_run:  # a preview asks nothing and uses no code; the real run asks
+            said = confirm.owner_yes(
+                store.home, f"invoice.issue|{inv['id']}|{figures}", question, owner_confirmed, confirm_code,
+                why=f"{inv['id']} has estimated figures. Issuing makes the invoice final, so only the owner can "
+                "confirm them: ask, and wait for their answer.",
+                hint="Ask the owner the question in ask_owner, word for word. Only if they say yes: jtp invoice issue "
+                f'{inv["id"]} --owner-confirmed "<their exact words>" --confirm <the code in confirm> (their words '
+                f"are kept on the invoice). If a figure changed: jtp invoice show {inv['id']} --as-spec > inv.json, "
+                f"fix the figure, then jtp invoice update {inv['id']} --spec inv.json. It stays marked as an "
+                "estimate until the owner confirms it here.",
+                ask_code="estimates_unconfirmed",
+                echo=ESTIMATES_FINAL_WORDS,
+            )
     day = parse_date(date or "today", store.today())
-    if estimated:
+    if asked_about and not dry_run:
         inv["estimates_confirmed"] = {
             "date": iso(day),
             "owner_said": said,
             "lines": [
-                {"id": ln["id"], "description": ln.get("description", ""), "amount": ln["amount"]} for ln in estimated
+                {"id": ln["id"], "description": ln.get("description", ""), "amount": ln["amount"]}
+                for ln in asked_about
             ],
         }
         store.log("invoice.estimates_confirmed", inv["id"], owner_said=said)
@@ -1186,6 +1232,10 @@ def invoice_issue(
         balance -= use
         applied.append({"payment": payment["id"], "amount": str(use)})
     _refresh_paid(store, inv)
+    if dry_run:  # nothing saved, no code used: show what issuing would do
+        preview = dict(inv, id=PREVIEW_ID)
+        return {"invoice": preview, "dry_run": True, "would_issue": inv["id"], "deposits_applied": applied,
+                **({"owner_question": question} if question else {})}  # fmt: skip
     store.save_doc(inv)
     if inv.get("kind") in ("final", "tm", "standard") and job["status"] not in ("paid", "closed"):
         job["status"] = "invoiced"
@@ -1247,11 +1297,17 @@ def invoice_delete(store, ident: str) -> dict:
     return {"deleted": inv["id"], "removed_empty_job": job["id"] if removed_job else None}
 
 
-def invoice_void(store, ident: str, reason: str | None) -> dict:
+# What a plain yes to "Void invoice ...?" may add ("yes, void it").
+VOID_WORDS = ("void it", "void", "void the invoice", "void invoice")
+
+
+def invoice_void(store, ident: str, reason: str | None, owner_confirmed=None, confirm_code=None) -> dict:
     inv = store.doc(ident, "invoice")
     if inv["status"] == "void":
+        if owner_confirmed and confirm.reads_as_no(owner_confirmed):  # never answer a no with "void"
+            raise JTPError(f"{inv['id']} was already void, so the owner's no can't change that. Nothing was changed.",
+                           code="already_void")  # fmt: skip
         return {"invoice": inv, "already_void": True}
-    job = store.job(inv["job_id"])
     credit = None
     if inv["status"] in ("issued", "paid"):
         if inv.get("payments"):
@@ -1262,18 +1318,38 @@ def invoice_void(store, ident: str, reason: str | None) -> dict:
             )
         state = invoice_state(inv, store.today())
         if state["balance"] > 0:
-            credit = credit_create(
-                store, inv["id"], amount=str(state["balance"]), reason=reason or f"Cancels invoice {inv['id']}"
-            )["credit_note"]
-            inv = store.doc(ident, "invoice")
+            credit, _ = _credit_note(store, inv, amount=str(state["balance"]),
+                                     reason=reason or f"Cancels invoice {inv['id']}")  # fmt: skip
+    # Voiding can't be undone, so it waits for the owner's plain yes to this question, sent back with its code.
+    disp = store.money()
+    what = "draft invoice" if inv["status"] == "draft" else "invoice"
+    question = (f"Void {what} {inv['id']} for {customer_label(store, inv['customer_id'])} "
+                f"({format_total(to_decimal(inv['totals']['total']), disp)})?")  # fmt: skip
+    if credit:
+        question += f" A credit note for {format_total(to_decimal(credit['totals']['total']), disp)} goes with it."
+    if reason:
+        question += f" Reason: {reason.strip().rstrip('.')}."
+    question += " This can't be undone."
+    credited = credit["totals"]["total"] if credit else ""
+    said = confirm.owner_yes(
+        store.home, f"invoice.void|{inv['id']}|{inv['totals']['total']}|{credited}|{reason or ''}", question,
+        owner_confirmed, confirm_code,
+        why=f"Voiding {inv['id']} can't be undone, so only the owner can approve it: ask, and wait for their answer.",
+        echo=VOID_WORDS + (inv["id"],),
+    )
+    if credit:
+        _save_credit(store, inv, credit, said, on_job=False)
+    job = store.job(inv["job_id"])
     inv["status"] = "void"
     inv["void_reason"] = reason or ""
+    inv["void_approved"] = {"date": iso(store.today()), "owner_said": said}
     _link(store, job, inv, attach=False)
     store.save_doc(inv)
     if job["status"] in ("invoiced", "paid"):
         job["status"] = "complete"
     store.save_job(job)
-    store.log("invoice.void", inv["id"], reason=reason)
+    store.log("invoice.void", inv["id"], reason=reason, owner_said=said)
+    confirm.use(store.home, confirm_code)  # the owner's yes counts once
     return {
         "invoice": inv,
         "credit_note": credit,
@@ -1337,8 +1413,38 @@ def _credit_lines_for_amount(store, inv: dict, amount: Decimal, reason: str) -> 
     return specs
 
 
-def credit_create(store, invoice_id: str, spec=None, amount=None, reason=None, dry_run=False) -> dict:
+# What a plain yes to "Issue a credit note ...?" may add ("yes, issue it").
+CREDIT_WORDS = ("issue it", "issue the credit note", "credit it", "credit note")
+
+
+def credit_create(
+    store, invoice_id: str, spec=None, amount=None, reason=None, dry_run=False, owner_confirmed=None, confirm_code=None
+) -> dict:
     inv = store.doc(invoice_id, "invoice")
+    doc, warnings = _credit_note(store, inv, spec, amount, reason)
+    disp = store.money()
+    question = (f"Issue a credit note for {format_total(to_decimal(doc['totals']['total']), disp)} on invoice "
+                f"{inv['id']} for {customer_label(store, inv['customer_id'])}? Reason: {doc['reason'].rstrip('.')}. "
+                "This can't be undone.")  # fmt: skip
+    refund = to_decimal(doc["refund_due"])
+    if refund > 0:
+        question += f" They've already paid, so you'd owe them a refund of {format_total(refund, disp)}."
+    if dry_run:  # a preview asks nothing and uses no code
+        return _credit_out(doc, warnings, disp, owner_question=question)
+    said = confirm.owner_yes(
+        store.home, f"credit.create|{inv['id']}|{doc['totals']['total']}|{doc['reason']}", question, owner_confirmed,
+        confirm_code,
+        why=f"A credit note on {inv['id']} can't be undone, so only the owner can approve it: ask, and wait for their "
+        "answer.",
+        echo=CREDIT_WORDS,
+    )
+    _save_credit(store, inv, doc, said)
+    confirm.use(store.home, confirm_code)  # the owner's yes counts once
+    return _credit_out(doc, warnings, disp)
+
+
+def _credit_note(store, inv: dict, spec=None, amount=None, reason=None) -> tuple:
+    """The credit note a credit would make, and its warnings: checked, but not numbered or saved yet."""
     if inv["status"] not in ("issued", "paid"):
         raise JTPError(
             f"{inv['id']} is {inv['status']}.",
@@ -1369,7 +1475,7 @@ def credit_create(store, invoice_id: str, spec=None, amount=None, reason=None, d
         )
     refund_due = max(ZERO, credit_total - max(state["balance"], ZERO))
     doc = {
-        "id": PREVIEW_ID if dry_run else store.next_id("credit_note"),
+        "id": PREVIEW_ID,  # numbered when saved (_save_credit)
         "type": "credit_note",
         "status": "issued",
         "invoice_id": inv["id"],
@@ -1383,20 +1489,32 @@ def credit_create(store, invoice_id: str, spec=None, amount=None, reason=None, d
         "refund_due": str(q(refund_due, places)),
         "created_at": now_stamp(),
     }
-    if not dry_run:
-        store.save_doc(doc)
-        inv["credits"].append({"credit_note": doc["id"], "amount": totals["total"], "date": doc["date"]})
-        _refresh_paid(store, inv)
-        store.save_doc(inv)
-        job = store.job(inv["job_id"])
+    return doc, warnings
+
+
+def _save_credit(store, inv: dict, doc: dict, said: str, on_job: bool = True) -> None:
+    """Number and save a credit note the owner approved, and take it off the invoice. A void's credit note isn't
+    listed on the job: the void already takes the invoice out of the job's sales (reports.job_summary)."""
+    doc["id"] = store.next_id("credit_note")
+    doc["owner_approved"] = {"date": doc["date"], "owner_said": said}
+    store.save_doc(doc)
+    inv["credits"].append({"credit_note": doc["id"], "amount": doc["totals"]["total"], "date": doc["date"]})
+    _refresh_paid(store, inv)
+    store.save_doc(inv)
+    job = store.job(inv["job_id"])
+    if on_job:
         job.setdefault("credit_notes", []).append(doc["id"])
-        _update_job_after_money(store, job)
-        store.save_job(job)
-        store.log("credit.create", doc["id"], invoice=inv["id"], total=totals["total"])
-    out = {"credit_note": doc, "warnings": warnings}
-    if refund_due > 0:
+    _update_job_after_money(store, job)
+    store.save_job(job)
+    store.log("credit.create", doc["id"], invoice=inv["id"], total=doc["totals"]["total"], owner_said=said)
+
+
+def _credit_out(doc: dict, warnings: list, disp: dict, **extra) -> dict:
+    out = {"credit_note": doc, "warnings": warnings, **extra}
+    refund = to_decimal(doc["refund_due"])
+    if refund > 0:
         out["note"] = (
-            f"The customer had already paid, so you owe them a refund of {q(refund_due, places)}. "
+            f"The customer had already paid, so you owe them a refund of {format_total(refund, disp)}. "
             "Refund it the way they paid and keep this credit note with your records."
         )
     return out

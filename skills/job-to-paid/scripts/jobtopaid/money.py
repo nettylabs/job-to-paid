@@ -154,6 +154,13 @@ def format_money(value: Decimal, disp: dict, extra_places: int = 0, symbol: bool
     return ("-" if negative else "") + number
 
 
+def format_total(value: Decimal, disp: dict) -> str:
+    """A total as said in chat and on the brief: with the currency code where the symbol is shared ("$1,234.50 CAD"),
+    the same as the totals on the PDFs (locale.show_currency_code)."""
+    text = format_money(value, disp)
+    return f"{text} {disp['code']}" if disp.get("show_code") else text
+
+
 def format_qty(value: Decimal, disp: dict) -> str:
     text = trim_decimal(Decimal(value))
     if disp["decimal"] != ".":

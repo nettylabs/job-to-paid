@@ -52,8 +52,9 @@ It never decides your taxes for you and isn't tax or legal advice. It applies ex
 ## Safe by design
 
 - **You approve every message.** Nothing goes to a customer until you say so. It never charges cards or moves money.
-- **Only your plain yes counts.** Before an invoice with estimated figures becomes final, it asks you, and only a
-  clear "yes" to that exact question goes through: "ok", "sure", a thumbs-up or "yes, next week" doesn't.
+- **Only your plain yes counts.** Before an invoice with estimated figures becomes final, and before an invoice is
+  voided or a credit note is made, it asks you, and only a clear "yes" to that exact question goes through: "ok",
+  "sure", a thumbs-up or "yes, next week" doesn't.
 - **Exact math.** Every total, tax, discount, deposit and balance comes from a tested calculator (Python
   `Decimal`, correct rounding per currency), never from the AI's head. Tax is worked out line by line, so the
   invoice always matches the quote plus approved changes, to the cent.

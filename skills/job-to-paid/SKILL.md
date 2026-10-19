@@ -35,9 +35,10 @@ to you like they'd talk to an office manager, often from a job site, often by vo
    in the preview. If you must estimate (for example from a supplier's website), add
    `"estimate": true` to the line, say where the number came from, and get the owner's OK before
    sending. Estimated lines print "(estimate)" on the quote, so drop the flag once the owner
-   confirms the figure. An invoice won't issue while estimates remain: put the toolkit's question
-   (`ask_owner`) to the owner word for word and, only if they say yes, pass their exact reply with
-   `--owner-confirmed` and the output's `confirm` code with `--confirm`. Taxes come only from the profile
+   confirms the figure. On an invoice, an estimated figure stays marked until the owner confirms it
+   when you issue: `jtp invoice issue` returns the toolkit's question (`ask_owner`). Put it to the
+   owner word for word and, only if they say yes, pass their exact reply with `--owner-confirmed`
+   and the output's `confirm` code with `--confirm`. Taxes come only from the profile
    the owner confirmed, so don't override a line's tax unless the owner says to. You can look up
    official rates to *suggest*, but you don't decide them, and you never give tax or legal advice.
    Don't add work or promises the owner didn't mention; ask instead.
@@ -68,7 +69,8 @@ python3 <this-skill-folder>/scripts/jtp.py <command> [options]
   output also has a `confirm` code, run the command again only if they say yes, with their exact words in
   `--owner-confirmed` and the code in `--confirm`. Only a plain yes as the whole answer counts ("yes",
   "yes, they're final"): "ok", "sure", an emoji, a question, a joke or a yes with a condition is refused,
-  so ask again. Each code works once.
+  so ask again. Each code works once. Issuing an invoice with estimated figures, voiding an invoice and
+  making a credit note all ask this way. If the owner says no, tell them it wasn't done.
 - `jtp <command> --help` shows options and real examples. Start with `jtp --help`.
 - Records live in one data folder: `$JTP_HOME`, else `/workspace/job-to-paid` when `/workspace`
   exists, else `~/job-to-paid`. Keep it on a disk that persists. Remember the path you used.

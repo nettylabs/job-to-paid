@@ -14,10 +14,11 @@
 - **No hooks, no MCP servers, no background processes.** The plugin is one skill, four slash commands and the toolkit.
 - **Money is never moved.** The toolkit only records payments. The skill instructs the agent to send nothing to a
   customer and charge nothing without the owner's explicit approval.
-- **The owner's yes is checked, not assumed.** Issuing an invoice that still has estimated figures stops with the
-  exact question and a one-time code. It runs only when the owner's own words are a plain yes ("ok", "sure" or
-  "yes, next week" isn't) and come back with that code, which is tied to that invoice and those figures and works
-  once. A code proves the question was asked, not who answered: the agent is trusted to ask the owner.
+- **The owner's yes is checked, not assumed.** Issuing an invoice that had estimated figures, voiding an invoice
+  and making a credit note each stop with the exact question and a one-time code. They run only when the owner's
+  own words are a plain yes ("ok", "sure" or "yes, next week" isn't) and come back with that code, which is tied to
+  that action and its figures and works once. Editing an invoice can't take an estimate off: only the owner's yes
+  when issuing does. A code proves the question was asked, not who answered: the agent is trusted to ask the owner.
 
 ## Reporting a vulnerability
 
