@@ -259,24 +259,47 @@ _PHONE = re.compile(r"\+?\(?\d[\d ().-]{5,}\d")
 def follow_contact(profile: dict, key: str, old, new) -> tuple:
     """After business.email or business.phone changes, payment instructions that gave the old one give the new one.
     Returns (the names of the methods changed, warnings): other email addresses left in the instructions are named,
-    since only the owner knows if those changed too (a separate address for e-Transfers, say)."""
+    since only the owner knows if those changed too (a separate address for e-Transfers, say), and so are numbers
+    that end like the old phone but can't be told to be it (a local "555-0100")."""
     old, new = str(old or "").strip(), str(new or "").strip()
     changed, warnings = [], []
     if key not in ("business.email", "business.phone") or not old or not new or old == new:
         return changed, warnings
     swap = _swap_email if key == "business.email" else _swap_phone
     for method in profile["payment"].get("methods") or []:
+        name = method.get("name") or "a payment method"
         text = method.get("instructions")
         if isinstance(text, str) and swap(text, old, new) != text:
             method["instructions"] = swap(text, old, new)
-            changed.append(method.get("name") or "a payment method")
-        others = sorted({e for e in _EMAIL.findall(str(method.get("instructions") or "")) if e.lower() != new.lower()})
-        if key == "business.email" and others:
-            warnings.append(
-                f"The payment instructions for {method.get('name') or 'a payment method'} still give "
-                f"{', '.join(others)}. If that changed too, update them: jtp profile set payment.methods '<json>'"
-            )
+            changed.append(name)
+        text = str(method.get("instructions") or "")
+        if key == "business.email":
+            others = sorted({e for e in _EMAIL.findall(text) if e.lower() != new.lower()})
+            if others:
+                warnings.append(
+                    f"The payment instructions for {name} still give {', '.join(others)}. If that changed too, "
+                    "update them: jtp profile set payment.methods '<json>'"
+                )
+        else:
+            near = _near_phones(text, old, new)
+            if near:
+                warnings.append(
+                    f"The payment instructions for {name} still give {', '.join(near)}, which "
+                    f"{'ends' if len(near) == 1 else 'end'} like the old number {old}. If that's the old number, "
+                    "change it there too: jtp profile set payment.methods '<json>'"
+                )
     return changed, warnings
+
+
+def _near_phones(text: str, old: str, new: str) -> list:
+    """Numbers in the text that end with the old phone's last 7 digits but weren't taken to be the same number (a
+    local "555-0100", an account number): only the owner can tell."""
+    tail = re.sub(r"\D", "", old)[-7:]
+    if len(tail) < 7:
+        return []
+    found = {m.group() for m in _PHONE.finditer(text)
+             if re.sub(r"\D", "", m.group()).endswith(tail) and not _same_phone(m.group(), new)}  # fmt: skip
+    return sorted(found)
 
 
 def _swap_email(text: str, old: str, new: str) -> str:
@@ -291,8 +314,9 @@ def _swap_phone(text: str, old: str, new: str) -> str:
 
 def _phone_digits(text: str) -> tuple:
     """(digits, international): "+1 604 555 0100" and "0044 20 7946 0100" are international; "(604) 555-0100" and
-    "020 7946 0100" are national, with a leading trunk 0 left off."""
-    raw = text.strip()
+    "020 7946 0100" are national, with a leading trunk 0 left off, and so is a "(0)" after a country code
+    ("+44 (0)20 7946 0100")."""
+    raw = re.sub(r"\(0\)", "", text.strip())
     digits = re.sub(r"\D", "", raw)
     if raw.startswith("+"):
         return digits, True

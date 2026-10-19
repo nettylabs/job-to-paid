@@ -95,10 +95,23 @@ def customer_add(store, data: dict) -> dict:
                 "note": f"{cust['name']} already exists as {cust['id']}; used that record.",
             }
     cust = {"id": store.next_id("customer"), **fields, "created_at": now_stamp()}
+    namesakes = [c for c in customers if _name_key(c.get("name")) == _name_key(cust["name"])]
     customers.append(cust)
     store.save_customers(customers)
     store.log("customer.add", cust["id"], name=cust["name"])
-    return {"customer": cust, "existing": False}
+    out = {"customer": cust, "existing": False}
+    if namesakes:  # two customers can share a name, but a second record for the same person splits their history
+        out["warnings"] = [
+            f"There's already a customer called {c['name']}: {c['id']}"
+            + (f" ({c.get('email') or c.get('phone')})" if c.get("email") or c.get("phone") else "")
+            + f". If it's the same person, use {c['id']} instead of {cust['id']}."
+            for c in namesakes
+        ]
+    return out
+
+
+def _name_key(name) -> str:
+    return " ".join(str(name or "").split()).casefold()
 
 
 def customer_update(store, ident: str, data: dict) -> dict:

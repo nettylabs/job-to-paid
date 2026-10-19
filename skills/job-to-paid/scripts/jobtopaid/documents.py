@@ -11,6 +11,7 @@ Rules that keep the books trustworthy:
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from collections import OrderedDict, defaultdict
 from decimal import Decimal
 
@@ -613,11 +614,12 @@ def co_void(store, ident: str, reason) -> dict:
     doc = store.doc(ident, "change_order")
     if doc.get("invoice"):
         raise JTPError(f"{doc['id']} is on invoice {doc['invoice']}.", hint="Void that invoice first.")
+    warnings = _remember_estimates(store, doc, "voided") if doc["status"] != "void" else []
     doc["status"] = "void"
     doc["void_reason"] = reason or ""
     store.save_doc(doc)
     store.log("co.void", doc["id"])
-    return {"change_order": doc}
+    return {"change_order": doc, "warnings": warnings}
 
 
 # =================================================================== invoices
@@ -987,11 +989,7 @@ def invoice_create(
     }
     if any(ln.get("estimate") for ln in lines):
         doc["had_estimates"] = True  # only the owner's yes when issuing clears this (invoice_issue)
-    if _pending_estimates(store, doc["customer_id"]):
-        warnings.append(
-            f"An earlier draft for {customer_label(store, doc['customer_id'])} was deleted or voided with estimates "
-            "the owner never confirmed, so issuing this invoice asks the owner to confirm its figures."
-        )
+    warnings += _copied_warnings(store, doc)
     if not dry_run:
         store.save_doc(doc)
         job["invoices"].append(doc["id"])
@@ -1063,18 +1061,33 @@ def invoice_update(store, ident: str, spec: dict) -> dict:
     warnings, suggestions = [], []
     if spec.get("lines"):
         _link(store, job, inv, attach=False)
-        estimated = {_line_key(ln) for ln in inv["lines"] if ln.get("estimate")}
+        before = _estimate_items(store, [ln for ln in inv["lines"] if ln.get("estimate")])
+        estimated = {item["key"] for item in before}
+        taken_off = list(inv.get("removed_estimates") or [])
         inv["lines"], inv["totals"], warnings, suggestions = build_lines(store, spec["lines"], prefix="I")
         kept = []
         for ln in inv["lines"]:  # an estimate stays one until the owner confirms it when issuing
-            if _line_key(ln) in estimated and not ln.get("estimate"):
+            back = any((t["key"], t["amount"]) == (_line_key(ln), _amount(ln)) for t in taken_off)
+            if not ln.get("estimate") and (_line_key(ln) in estimated or back):
                 ln["estimate"] = True
                 kept.append(ln.get("description") or ln["id"])
         if kept:
             warnings.append(f"Kept \"(estimate)\" on {', '.join(kept)}: only the owner's yes when issuing confirms "
                             "an estimated figure.")  # fmt: skip
+        # An estimate changed or taken off stays on record here, so the same figure on another invoice still asks
+        # and this invoice's own question names it (_estimates_question).
+        now = {(_line_key(ln), _amount(ln)) for ln in inv["lines"] if ln.get("estimate")}
+        for item in before:
+            if (item["key"], item["amount"]) not in now | {(t["key"], t["amount"]) for t in taken_off}:
+                taken_off.append(item)
+        taken_off = [t for t in taken_off if (t["key"], t["amount"]) not in now]
+        if taken_off:
+            inv["removed_estimates"] = taken_off
+        else:
+            inv.pop("removed_estimates", None)
         if estimated or any(ln.get("estimate") for ln in inv["lines"]):
             inv["had_estimates"] = True
+        warnings += _copied_warnings(store, inv)
         source = {k: v for k, v in (inv.get("source") or {}).items() if k not in ("log_entries", "change_orders")}
         cos = sorted({(ln.get("source") or {}).get("change_order") for ln in inv["lines"]} - {None})
         logs = sorted({lid for ln in inv["lines"] for lid in ((ln.get("source") or {}).get("log") or [])})
@@ -1094,7 +1107,12 @@ def invoice_update(store, ident: str, spec: dict) -> dict:
 
 
 def _line_key(line: dict) -> str:
-    return " ".join(str(line.get("description") or "").split()).casefold()
+    return _key_of(line.get("description"))
+
+
+def _key_of(description) -> str:
+    """A description folded for matching: case, spacing and punctuation ignored ("Call-out" is "call out")."""
+    return " ".join(re.sub(r"[\W_]+", " ", str(description or "")).split()).casefold()
 
 
 def invoice_state(inv: dict, day: _dt.date) -> dict:
@@ -1155,62 +1173,227 @@ def _estimate_lines(inv: dict) -> list:
     return marked or (priced(inv["lines"]) if inv.get("had_estimates") else [])
 
 
-def _pending_estimates(store, customer_id) -> list:
-    """Estimates on this customer's deleted or voided drafts that the owner never confirmed (_remember_estimates)."""
+def _amount(line: dict) -> str:
+    """A line's figure for matching: its amount before tax, written plainly ("89.00" and "89" are the same)."""
+    return format(to_decimal(line.get("amount") or "0").normalize(), "f")
+
+
+def _estimate_items(store, lines: list) -> list:
+    """Estimated lines as {"key", "amount", "figure"}: what's matched (description and amount) and what's named."""
+    disp = store.money()
+    return [{"key": _line_key(ln), "amount": _amount(ln), "figure": _estimate_figure(ln, disp)} for ln in lines]
+
+
+def _draft_estimates(store, inv: dict) -> list:
+    """The estimates on a draft invoice the owner hasn't confirmed: its marked lines, and the estimates changed or
+    taken off it since (removed_estimates, kept by invoice_update). Never its other lines."""
+    if inv.get("estimates_confirmed"):
+        return []
+    return _estimate_items(store, [ln for ln in inv["lines"] if ln.get("estimate")]) + list(
+        inv.get("removed_estimates") or []
+    )
+
+
+def _customer_field(store, customer_id, field: str) -> list:
     try:
-        return list(store.customer(customer_id).get("unconfirmed_estimates") or [])
+        return list(store.customer(customer_id).get(field) or [])
     except JTPError:
         return []
 
 
-def _set_pending_estimates(store, customer_id, entries: list) -> None:
+def _set_customer_field(store, customer_id, field: str, entries: list) -> None:
     customers = store.customers()
     for cust in customers:
         if cust["id"] == customer_id:
             if entries:
-                cust["unconfirmed_estimates"] = entries
+                cust[field] = entries
             else:
-                cust.pop("unconfirmed_estimates", None)
+                cust.pop(field, None)
     store.save_customers(customers)
 
 
-def _remember_estimates(store, inv: dict, removed: str) -> list:
-    """A draft is being deleted or voided with estimates the owner never confirmed. They're kept on the customer, so
-    the next invoice for them asks the owner to confirm its figures: a copy of the lines without the marks would
-    otherwise issue unasked. Returns the warnings for the agent."""
-    lines = _estimate_lines(inv)
-    if not lines:
+def _remembered(store, customer_id) -> list:
+    """Estimates the owner never confirmed that are no longer on an open document: from this customer's deleted or
+    voided drafts and voided change orders, and taken off issued invoices before they were issued."""
+    return _customer_field(store, customer_id, "unconfirmed_estimates")
+
+
+def _entry_lines(entry: dict) -> list:
+    """A remembered entry's estimates, as {"key", "amount", "figure"}. 1.0.1 kept only the figures' text ("Call-out: 1
+    ea at $89.00 = $89.00 CAD; ..."): those are read back by description, with any amount (None)."""
+    if entry.get("lines"):
+        return [dict(item, key=_key_of(item["key"]), amount=item.get("amount")) for item in entry["lines"]]
+    figures = [f for f in str(entry.get("figures") or "").split("; ") if f]
+    return [{"key": _key_of(f.split(": ", 1)[0]), "amount": None, "figure": f} for f in figures]
+
+
+def _remembered_where(entry: dict) -> str:
+    if entry.get("change_order"):
+        return f"voided change order {entry['change_order']}"
+    if entry.get("removed") == "voided":
+        return f"voided draft {entry.get('invoice')}"
+    if entry.get("removed") == "changed":
+        return f"invoice {entry.get('invoice')}, before it was changed"
+    return "a deleted draft"  # its number was freed for the next invoice, so it isn't named
+
+
+def _confirmed_figures(store, customer_id) -> set:
+    """The (description, amount) figures the owner has confirmed for this customer: a yes sticks, so the same figure
+    isn't asked about again as a copy of an estimate."""
+    return {(_key_of(c["key"]), c["amount"]) for c in _customer_field(store, customer_id, "confirmed_figures")}
+
+
+def _note_confirmed(store, customer_id, items: list, invoice_id: str) -> None:
+    pairs = {(i["key"], i["amount"]) for i in items}
+    kept = [c for c in _customer_field(store, customer_id, "confirmed_figures")
+            if (_key_of(c["key"]), c["amount"]) not in pairs]  # fmt: skip
+    added = [{"key": i["key"], "amount": i["amount"], "invoice": invoice_id, "date": iso(store.today())}
+             for i in items]  # fmt: skip
+    _set_customer_field(store, customer_id, "confirmed_figures", (kept + added)[-CONFIRMED_KEPT:])
+
+
+CONFIRMED_KEPT = 200  # confirmed figures kept per customer, the newest
+
+
+def _remember_estimates(store, doc: dict, removed: str) -> list:
+    """A draft invoice or a change order is being deleted or voided with estimates the owner never confirmed.
+    They're kept on the customer: if the same figure turns up on another invoice for them, even without the mark,
+    issuing it asks the owner (_estimates_question). Returns the warnings for the agent."""
+    if doc["type"] == "invoice":
+        items = _draft_estimates(store, doc)
+    else:
+        items = _estimate_items(store, [ln for ln in doc["lines"] if ln.get("estimate")])
+    confirmed = _confirmed_figures(store, doc["customer_id"])
+    items = [i for i in items if (i["key"], i["amount"]) not in confirmed]
+    if not items:
         return []
-    figures = "; ".join(_estimate_figure(ln, store.money()) for ln in lines)
-    entry = {"invoice": inv["id"], "removed": removed, "date": iso(store.today()), "figures": figures}
-    _set_pending_estimates(store, inv["customer_id"], _pending_estimates(store, inv["customer_id"]) + [entry])
+    entry = {"removed": removed, "date": iso(store.today()), "lines": items}
+    if removed != "deleted":  # a deleted draft's number is freed for the next invoice, so it isn't kept
+        entry[doc["type"]] = doc["id"]
+    _set_customer_field(store, doc["customer_id"], "unconfirmed_estimates",
+                        _remembered(store, doc["customer_id"]) + [entry])  # fmt: skip
+    figures = "; ".join(i["figure"] for i in items)
+    which = "The deleted draft" if removed == "deleted" else doc["id"]
     return [
-        f"{inv['id']} had estimates the owner never confirmed ({figures}). The next invoice for "
-        f"{customer_label(store, inv['customer_id'])} asks the owner to confirm its figures before it's issued."
+        f"{which} had estimates the owner never confirmed ({figures}). If these figures go on another invoice for "
+        f"{customer_label(store, doc['customer_id'])}, issuing it asks the owner to confirm them."
+    ]
+
+
+def _forget_estimates(store, customer_id, items: list) -> None:
+    """The owner confirmed these figures: they're no longer remembered as estimates (an old record with no amount
+    is matched by description)."""
+    pairs = {(i["key"], i["amount"]) for i in items}
+    keys = {i["key"] for i in items}
+    before = _remembered(store, customer_id)
+    after = []
+    for entry in before:
+        left = [i for i in _entry_lines(entry)
+                if (i["key"], i["amount"]) not in pairs and not (i["amount"] is None and i["key"] in keys)]  # fmt: skip
+        if left:
+            after.append(dict({k: v for k, v in entry.items() if k != "figures"}, lines=left))
+    if after != before:
+        _set_customer_field(store, customer_id, "unconfirmed_estimates", after)
+
+
+def _estimates_elsewhere(store, inv: dict) -> tuple:
+    """Estimates the owner hasn't confirmed elsewhere for this invoice's customer, as {(description, amount):
+    [where...]} and, for old records with no amount, {description: [where...]}. They're on the customer's other
+    draft invoices (marked, or changed or taken off since), unbilled change orders and accepted quotes, and
+    remembered from deleted or voided ones. A figure the owner has confirmed for this customer doesn't count."""
+    exact, any_amount = defaultdict(list), defaultdict(list)
+    customer = inv["customer_id"]
+    confirmed = _confirmed_figures(store, customer)
+
+    def add(item, where):
+        if item["amount"] is None:
+            any_amount[item["key"]].append(where)
+        elif (item["key"], item["amount"]) not in confirmed:
+            exact[(item["key"], item["amount"])].append(where)
+
+    for entry in _remembered(store, customer):
+        for item in _entry_lines(entry):
+            add(item, _remembered_where(entry))
+    for other in store.docs("invoice"):
+        if other["customer_id"] == customer and other["status"] == "draft" and other["id"] != inv["id"]:
+            for item in _draft_estimates(store, other):
+                add(item, f"draft {other['id']}")
+    for co in store.docs("change_order"):
+        unbilled = co["status"] in ("draft", "sent", "approved") and not co.get("invoice")
+        if co.get("customer_id") == customer and unbilled:
+            for item in _estimate_items(store, [ln for ln in co["lines"] if ln.get("estimate")]):
+                add(item, f"change order {co['id']}")
+    for quote in store.docs("quote"):
+        if quote.get("customer_id") == customer and quote["status"] == "accepted":
+            chosen = (quote.get("accepted") or {}).get("option")
+            for option in quote["options"]:
+                if option["key"] == chosen:
+                    for item in _estimate_items(store, [ln for ln in option["lines"] if ln.get("estimate")]):
+                        add(item, f"quote {quote['id']}")
+    return exact, any_amount
+
+
+def _copied_estimates(store, inv: dict) -> tuple:
+    """(lines, where) for this invoice's unmarked lines with the same description and amount as an estimate the owner
+    hasn't confirmed elsewhere for this customer: a copy of an estimate without its mark."""
+    exact, any_amount = _estimates_elsewhere(store, inv)
+    copied, places = [], set()
+    for ln in priced(inv["lines"]):
+        if ln.get("estimate"):
+            continue
+        where = exact.get((_line_key(ln), _amount(ln))) or any_amount.get(_line_key(ln))
+        if where:
+            copied.append(ln)
+            places.update(where)
+    return copied, ", ".join(sorted(places))
+
+
+def _copied_warnings(store, inv: dict) -> list:
+    copied, where = _copied_estimates(store, inv)
+    if not copied:
+        return []
+    names = ", ".join(ln.get("description") or ln["id"] for ln in copied)
+    return [
+        f"{names}: the same figure as an estimate for {customer_label(store, inv['customer_id'])} that the owner "
+        f"hasn't confirmed ({where}), so issuing this invoice asks the owner to confirm it."
     ]
 
 
 def _estimates_question(store, inv: dict) -> tuple:
-    """(the lines to confirm, their figures, the question) before an invoice is issued, or ([], "", None).
+    """(the lines to confirm, the question, the estimates taken off it to name) before an invoice is issued, or
+    ([], None, []).
 
-    Marked lines are named as estimates (part of a quote's estimate on a progress, deposit or balance invoice).
-    When the marks can't be pinned to lines any more (renamed or removed, or an earlier draft for this customer was
-    deleted or voided with estimates), every figure is named."""
-    own, pending = _estimate_lines(inv), _pending_estimates(store, inv["customer_id"])
-    lines = priced(inv["lines"]) if pending else own
+    Its own estimates are named as estimates (part of a quote's estimate on a progress, deposit or balance
+    invoice). Estimates changed or taken off it since are named as such, with its figures. A line with the same
+    figure as an estimate the owner hasn't confirmed elsewhere for this customer is named too, with where that
+    estimate is (_copied_estimates)."""
+    own = _estimate_lines(inv)
+    copied, where = _copied_estimates(store, inv)
+    confirmed = _confirmed_figures(store, inv["customer_id"])
+    taken_off = [t for t in inv.get("removed_estimates") or [] if (t["key"], t["amount"]) not in confirmed]
+    ask = {ln["id"] for ln in own + copied}
+    lines = [ln for ln in inv["lines"] if ln["id"] in ask] or (priced(inv["lines"]) if taken_off else [])
     if not lines:
-        return [], "", None
+        return [], None, []
     figures = "; ".join(_estimate_figure(ln, store.money()) for ln in lines)
-    if pending:
-        why = (f"an earlier draft for {customer_label(store, inv['customer_id'])} had estimates you never "
-               "confirmed. Are these figures final?")  # fmt: skip
-    elif not any(ln.get("estimate") for ln in inv["lines"]):
-        why = "it had estimated figures, since changed or removed. Are these figures final?"
+    name = customer_label(store, inv["customer_id"])
+    marked = any(ln.get("estimate") for ln in inv["lines"])
+    if copied and not own:
+        main = f"these figures match estimates on {where} for {name} that you haven't confirmed. Are they final?"
+    elif copied:
+        main = f"these figures were estimates, some of them on {where} for {name}. Are they final?"
+    elif not marked:
+        main = "Are these figures final?" if taken_off else (
+            "it had estimated figures, since changed or removed. Are these figures final?")  # fmt: skip
     elif _part_of_quote(inv) and all((ln.get("source") or {}).get("quote_line") for ln in lines):
-        why = "these figures are based on estimates on the quote. Are they final?"
+        main = "these figures are based on estimates on the quote. Are they final?"
     else:
-        why = "these figures were estimates. Are they final?"
-    return lines, figures, f"Before I finalize invoice {inv['id']}: {why} {figures}"
+        main = "these figures were estimates. Are they final?"
+    if taken_off:
+        named = "; ".join(t["figure"] for t in taken_off)
+        was = "was an estimate" if len(taken_off) == 1 else "were estimates"
+        main = f"{named} {was}, since changed or taken off it. {main[0].upper()}{main[1:]}"
+    return lines, f"Before I finalize invoice {inv['id']}: {main} {figures}", taken_off
 
 
 def _part_of_quote(inv: dict) -> bool:
@@ -1266,16 +1449,14 @@ def invoice_issue(
     estimated = [ln for ln in inv["lines"] if ln.get("estimate")]
     # Estimates need the owner's yes, even if the marks were taken off since or the lines came from a draft that
     # was deleted: only that yes clears them (_estimates_question).
-    asked_about, figures, question = _estimates_question(store, inv)
-    pending = _pending_estimates(store, inv["customer_id"])
+    asked_about, question, taken_off = _estimates_question(store, inv)
     said = ""
     if asked_about:
         # Only the owner's plain yes to this exact question counts, sent back with its one-time code. The code
         # covers these figures: if one changes after the owner was asked, they're asked again (confirm.py).
         if not dry_run:  # a preview asks nothing and uses no code; the real run asks
             said = confirm.owner_yes(
-                store.home, f"invoice.issue|{inv['id']}|{figures}|{len(pending)}", question, owner_confirmed,
-                confirm_code,
+                store.home, f"invoice.issue|{inv['id']}|{question}", question, owner_confirmed, confirm_code,
                 why=f"{inv['id']} has estimated figures. Issuing makes the invoice final, so only the owner can "
                 "confirm them: ask, and wait for their answer.",
                 hint="Ask the owner the question in ask_owner, word for word. Only if they say yes: jtp invoice issue "
@@ -1296,6 +1477,9 @@ def invoice_issue(
                 for ln in asked_about
             ],
         }
+        if taken_off:
+            inv["estimates_confirmed"]["taken_off"] = taken_off
+        inv.pop("removed_estimates", None)
         store.log("invoice.estimates_confirmed", inv["id"], owner_said=said)
     for ln in estimated:
         ln.pop("estimate", None)  # confirmed by the owner: the issued invoice shows firm figures
@@ -1338,8 +1522,14 @@ def invoice_issue(
         return {"invoice": preview, "dry_run": True, "would_issue": inv["id"], "deposits_applied": applied,
                 **({"owner_question": question} if question else {})}  # fmt: skip
     store.save_doc(inv)
-    if pending and said:  # the owner confirmed this customer's figures, earlier drafts' estimates included
-        _set_pending_estimates(store, inv["customer_id"], [])
+    if said:  # the owner confirmed these figures: they stick, and none of them is remembered as an estimate
+        confirmed = _estimate_items(store, asked_about)
+        _note_confirmed(store, inv["customer_id"], confirmed, inv["id"])
+        _forget_estimates(store, inv["customer_id"], confirmed)
+        if taken_off:  # never confirmed: a copy of them elsewhere still asks
+            _set_customer_field(store, inv["customer_id"], "unconfirmed_estimates", _remembered(
+                store, inv["customer_id"]) + [{"invoice": inv["id"], "removed": "changed", "date": inv["date"],
+                                              "lines": taken_off}])  # fmt: skip
     if inv.get("kind") in ("final", "tm", "standard") and job["status"] not in ("paid", "closed"):
         job["status"] = "invoiced"
     _update_job_after_money(store, job)

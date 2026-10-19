@@ -21,12 +21,17 @@ progress, deposit and balance invoices built from them and after `invoice update
 refuses until the owner confirms them, returning the exact question to ask (`ask_owner`) and a one-time
 code (`confirm`). Ask it word for word and wait. If a figure changed, fix the line with `invoice update`
 and issue again: the old answer no longer counts, because the question names the figures. Only the
-owner's yes when issuing clears an estimate. A draft deleted or voided with unconfirmed estimates is
-remembered on the customer, so their next invoice asks the owner to confirm its figures. If the owner says yes, issue with `--owner-confirmed "<their exact words>" --confirm <code>`.
-Only a plain yes as the whole answer counts ("yes", "yes, they're final"); "ok", "sure", an emoji or a
-yes with a condition is refused (`unclear_answer`), so ask again, and a no stops it (`owner_declined`).
-Their reply is kept on the invoice and in the activity log, so the owner can always see who confirmed
-what. Never confirm on their behalf.
+owner's yes when issuing clears an estimate, and one changed or taken off a draft is named in its
+question. A line with the same description and amount as an estimate the owner hasn't confirmed for the
+same customer (on another draft, a change order or an accepted quote, or one that was deleted, voided or
+taken off an invoice) is asked about too, even without the mark: the output warns when you create or
+update such an invoice. A figure the owner has confirmed isn't asked about again. If the owner says yes,
+issue with `--owner-confirmed "<their exact words>" --confirm <code>`. Only a plain yes
+as the whole answer counts ("yes", "yes, they're final"); "ok", "sure", an emoji or a yes with a
+condition is refused (`unclear_answer`), so ask again, and a no stops it (`owner_declined`). Their reply
+is kept on the invoice and in the activity log, so the owner can always see who confirmed what. Never
+confirm on their behalf.
+
 
 **Deposits, the simple way:** if the customer pays a deposit, record it on the job
 (`jtp payment record --job J-0004 --deposit --amount 500 ...`). It comes off the next invoice
@@ -67,17 +72,18 @@ Issued invoices are locked, which is how real books work.
 
 - **Price wrong, goodwill discount, returned part**:
   `jtp credit create --invoice INV-0012 --amount 50 --reason "Goodwill: took longer than planned"`.
-  The amount includes tax, and the toolkit splits it correctly across tax rates. Or pass exact
-  lines with `--spec`. Preview first with `--dry-run`. Making it asks the owner first, the same way as
-  estimates: the output has the question (`ask_owner`) and a code (`confirm`), and only their plain yes,
-  sent back with `--owner-confirmed "<their exact words>" --confirm <code>`, makes the credit note. If
-  the invoice was already paid, the output says a refund is due. Send the credit note to the customer like an invoice (messages.md, "Credit
-  note"), then record it: `jtp credit mark-sent CN-0003 --channel email --to jane@example.com`.
-  An invoice fully cancelled by a credit note shows as `credited`, not paid.
-- **Whole invoice wrong** (wrong customer, duplicate): `jtp invoice void INV-0012 --reason "..."`.
-  It can't be undone, so it asks the owner first, the same way. An issued invoice gets a full credit note. Anything billed on it (time, materials, change orders)
-  becomes billable again. Invoices with payments can't be voided until the payments are moved
-  (`jtp payment undo PAY-0009`) or refunded.
+  The amount includes tax, and the toolkit splits it correctly across tax rates. Or pass exact lines
+  with `--spec`. Preview first with `--dry-run`. Making it asks the owner first, the same way as
+  estimates: the output has the question (`ask_owner`) and a code (`confirm`), and only their plain
+  yes, sent back with `--owner-confirmed "<their exact words>" --confirm <code>`, makes the credit
+  note. If the invoice was already paid, the output says a refund is due. Send the credit note to the
+  customer like an invoice (messages.md, "Credit note"), then record it:
+  `jtp credit mark-sent CN-0003 --channel email --to jane@example.com`. An invoice fully cancelled by
+  a credit note shows as `credited`, not paid.
+- **Whole invoice wrong** (wrong customer, duplicate): `jtp invoice void INV-0012 --reason "..."`. It
+  can't be undone, so it asks the owner first, the same way. An issued invoice gets a full credit
+  note. Anything billed on it (time, materials, change orders) becomes billable again. Invoices with
+  payments can't be voided until the payments are moved (`jtp payment undo PAY-0009`) or refunded.
 
 ## Numbers and records
 
