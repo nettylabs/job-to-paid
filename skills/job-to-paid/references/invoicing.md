@@ -10,16 +10,19 @@
 | No quote, charge for time and materials | `jtp invoice create --job J-0007 --tm` |
 | Quick one-off (service call) | `jtp invoice create --customer C-0003 --title "Service call: no hot water" --spec '[...]'` |
 | Add something extra to any of the above | add `--spec '[{"kind":"fee","description":"Return visit","unit_price":89}]'` |
+| Quote already fully billed, then a change order approved | `jtp invoice create --job J-0004` bills the approved change orders and extras |
 
 **Adding up:** tax is worked out line by line, so an invoice for an accepted quote plus approved change
 orders comes to exactly what the customer agreed to, and the last progress invoice bills exactly what's
 left, tax included. Never adjust totals by hand.
 
-**Estimates:** lines that were estimates on the quote stay marked "(estimate)" on the draft, also
-after `invoice update`, and `invoice issue` refuses until the owner confirms them, returning the exact
-question to ask (`ask_owner`) and a one-time code (`confirm`). Ask it word for word and wait. If a figure
-changed, fix the line with `invoice update` and issue again: the old answer no longer counts, because the
-question names the figures. Only the owner's yes when issuing clears an estimate. If the owner says yes, issue with `--owner-confirmed "<their exact words>" --confirm <code>`.
+**Estimates:** lines that were estimates on the quote stay marked "(estimate)" on the draft, also on
+progress, deposit and balance invoices built from them and after `invoice update`, and `invoice issue`
+refuses until the owner confirms them, returning the exact question to ask (`ask_owner`) and a one-time
+code (`confirm`). Ask it word for word and wait. If a figure changed, fix the line with `invoice update`
+and issue again: the old answer no longer counts, because the question names the figures. Only the
+owner's yes when issuing clears an estimate. A draft deleted or voided with unconfirmed estimates is
+remembered on the customer, so their next invoice asks the owner to confirm its figures. If the owner says yes, issue with `--owner-confirmed "<their exact words>" --confirm <code>`.
 Only a plain yes as the whole answer counts ("yes", "yes, they're final"); "ok", "sure", an emoji or a
 yes with a condition is refused (`unclear_answer`), so ask again, and a no stops it (`owner_declined`).
 Their reply is kept on the invoice and in the activity log, so the owner can always see who confirmed

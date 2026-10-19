@@ -548,6 +548,30 @@ def selftest() -> dict:
             zones = {c: demo_profile(c)["locale"]["timezone"] for c in ("USD", "CAD", "GBP", "AUD", "EUR")}
             check("the demo sets its town's time zone", all(zones.values()) and zones["CAD"] == "America/Vancouver",
                   zones)  # fmt: skip
+
+            # The findings of the review's third round.
+            estimated = docs.quote_create(store, {"title": "Valve", "lines": [
+                {"kind": "material", "description": "Valve", "qty": 1, "unit_cost": "100", "estimate": True}]},
+                customer_id=customer)["quote"]  # fmt: skip
+            whole_job = docs.quote_accept(store, estimated["id"], None, "Jane Doe", "email", None)["job"]
+            progress_100 = docs.invoice_create(store, job_id=whole_job, progress="100")["invoice"]["id"]
+            asked = _refusal(docs.invoice_issue, store, progress_100)
+            check("a progress invoice from an estimated quote asks the owner, even at 100%",
+                  asked == "estimates_unconfirmed", asked)  # fmt: skip
+            docs.invoice_delete(store, progress_100)  # the newest draft, so its number goes back
+            copied = docs.invoice_create(store, customer_id=customer, spec={"lines": fee})["invoice"]["id"]
+            asked = _refusal(docs.invoice_issue, store, copied)
+            check("a draft deleted with estimates is remembered: the customer's next invoice asks",
+                  asked == "estimates_unconfirmed", asked)  # fmt: skip
+            bank = {"payment": {"methods": [{"name": "Bank", "instructions": "Account 99916045550100, ref 5550100."}]}}
+            moved, _ = follow_contact(bank, "business.phone", "+1 604 555 0100", "+1 604 555 0199")
+            check("a phone change leaves account numbers alone", not moved, bank["payment"]["methods"])
+            added = docs.co_create(store, job_id, {"title": "Add a tap", "lines": [
+                {"kind": "fee", "description": "Add a tap", "unit_price": "50"}]})["change_order"]  # fmt: skip
+            docs.co_approve(store, added["id"], "Priya Patel", "text message", None)
+            later = docs.invoice_create(store, job_id=job_id)["invoice"]
+            check("a change order approved after the final invoice can still be billed",
+                  [ln["description"] for ln in later["lines"]] == ["Add a tap"], later["lines"])  # fmt: skip
             write_json(Path(tmp) / "ok.json", {"ok": True})
         finally:
             if old_today:

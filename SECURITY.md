@@ -18,7 +18,8 @@
   and making a credit note each stop with the exact question and a one-time code. They run only when the owner's
   own words are a plain yes ("ok", "sure" or "yes, next week" isn't) and come back with that code, which is tied to
   that action and its figures and works once. Editing an invoice can't take an estimate off: only the owner's yes
-  when issuing does. A code proves the question was asked, not who answered: the agent is trusted to ask the owner.
+  when issuing does. Progress, deposit and balance invoices built from an estimated quote ask too, and a draft
+  deleted or voided with unconfirmed estimates is remembered, so the customer's next invoice asks. A code proves the question was asked, not who answered: the agent is trusted to ask the owner.
 
 ## Reporting a vulnerability
 

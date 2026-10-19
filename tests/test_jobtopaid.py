@@ -33,6 +33,7 @@ from jobtopaid.render import render_doc, render_receipt  # noqa: E402
 from jobtopaid.view import build_view  # noqa: E402
 from jobtopaid.store import Store  # noqa: E402
 from jobtopaid.util import JTPError, to_decimal  # noqa: E402
+from jobtopaid.documents import priced  # noqa: E402
 
 EVERY = ["labour", "material", "equipment", "subcontract", "fee", "other"]
 # Replies an independent review of 1.0.0 saw count as the owner's yes (any two characters did), and more.
@@ -199,11 +200,15 @@ class PricingTests(StoreCase):
         too, with no warning."""
         records.pricebook_add(self.store, {"name": "Permit and inspection", "kind": "fee", "price": "175"})
         permit = "permit and inspection"
-        specs = [{"kind": "material", "pricebook": permit}, {"pricebook": permit}, {"kind": "fee", "pricebook": permit}]
+        specs = [{"kind": "material", "pricebook": permit}, {"pricebook": permit}, {"kind": "fee", "pricebook": permit},
+                 {"kind": "material", "pricebook": permit, "tax_codes": ["GST", "PST"]}]  # fmt: skip
         lines, warnings, _ = normalize_lines(self.store.profile(), self.store.pricebook(), specs, 2)
-        self.assertEqual([(ln["kind"], ln["tax_codes"]) for ln in lines], [("fee", ["GST"])] * 3)
+        self.assertEqual([(ln["kind"], ln["tax_codes"]) for ln in lines],
+                         [("fee", ["GST"])] * 3 + [("fee", ["GST", "PST"])])  # fmt: skip
         self.assertEqual([w for w in warnings if "price book lists" in w], [
-            "Line 1: the price book lists Permit and inspection as fee, so it's billed and taxed as fee, not material."
+            "Line 1: the price book lists Permit and inspection as fee, so it's billed and taxed as fee, not material.",
+            "Line 4: the price book lists Permit and inspection as fee, so it's billed as fee, not material "
+            "(the line's own tax codes still apply).",
         ])  # fmt: skip
 
     def test_contact_changes_reach_the_payment_instructions_and_nothing_else(self):
@@ -220,6 +225,24 @@ class PricingTests(StoreCase):
             "office@demo-plumbing.example.shop.example. Account 6045550199, ref 2026-10-18."))  # fmt: skip
         self.assertIn("pay@demo-plumbing.example", warnings[0])  # the e-Transfer address: only the owner knows
         self.assertEqual(follow_contact(profile, "business.name", "A", "B"), ([], []))
+
+    def test_a_phone_change_leaves_account_numbers_alone(self):
+        """An independent review: an account number that ended with the phone's digits, and a 7-digit reference
+        equal to its last 7 digits, were rewritten as the new phone number."""
+        profile = demo_profile("CAD")
+        profile["payment"]["methods"] = [
+            {"name": "Bank", "instructions": "Account 99916045550100, ref 5550100."},
+            {"name": "Card", "instructions": "Call (604) 555-0100, 604.555.0100 or 1-604-555-0100."},
+        ]  # fmt: skip
+        changed, _ = follow_contact(profile, "business.phone", "+1 604 555 0100", "+1 778 555 0123")
+        self.assertEqual(changed, ["Card"])
+        self.assertEqual([m["instructions"] for m in profile["payment"]["methods"]], [
+            "Account 99916045550100, ref 5550100.",
+            "Call +1 778 555 0123, +1 778 555 0123 or +1 778 555 0123.",
+        ])  # fmt: skip
+        uk = {"payment": {"methods": [{"name": "Phone", "instructions": "Ring 020 7946 0100. Sort code 20-79-46."}]}}
+        self.assertEqual(follow_contact(uk, "business.phone", "+44 20 7946 0100", "+44 20 7946 0999")[0], ["Phone"])
+        self.assertEqual(uk["payment"]["methods"][0]["instructions"], "Ring +44 20 7946 0999. Sort code 20-79-46.")
 
     def _gst_only(self, inclusive=False, costs_include_tax=False):
         profile = self.store.profile()
@@ -674,10 +697,101 @@ class WorkflowTests(StoreCase):
         docs.invoice_update(self.store, inv_id, spec)
         self.assertFalse([ln for ln in self.store.doc(inv_id)["lines"] if ln.get("estimate")])
         asked = self._asked(inv_id)
+        self.assertIn("it had estimated figures, since changed or removed. Are these figures final?", asked.ask_owner)
         self.assertIn("Install and test: 3 hr", asked.ask_owner)  # with no line marked, every figure is named
         self.assertIn("Call-out", asked.ask_owner)
         issued = docs.invoice_issue(self.store, inv_id, owner_confirmed="yes", confirm_code=asked.confirm)["invoice"]
         self.assertEqual((issued["status"], issued["estimates_confirmed"]["owner_said"]), ("issued", "yes"))
+
+    def _estimated_quote_job(self):
+        quote = self._fixed_quote([{"kind": "material", "description": "Valve", "qty": 1, "unit_cost": "100",
+                                    "estimate": True}, {"kind": "labour", "description": "Install", "qty": 3}])  # fmt: skip
+        return docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+
+    def _issue_with_the_owners_yes(self, inv_id):
+        asked = self._asked(inv_id)
+        docs.invoice_issue(self.store, inv_id, owner_confirmed="yes", confirm_code=asked.confirm)
+        return asked.ask_owner
+
+    def test_progress_deposit_and_balance_invoices_keep_the_quotes_estimates(self):
+        """An independent review of 1.0.1: a progress, deposit or balance invoice from a quote dropped the estimate
+        mark and issued with no owner's yes (--progress 100 billed the whole job unasked)."""
+        routes = {"progress 100": [{"progress": "100"}], "progress 50, then the balance": [{"progress": "50"}, {}],
+                  "deposit 25, then the balance": [{"progress": "25", "deposit_invoice": True}, {}]}  # fmt: skip
+        for route, steps in routes.items():
+            with self.subTest(route=route):
+                job_id = self._estimated_quote_job()
+                for step in steps:
+                    inv = docs.invoice_create(self.store, job_id=job_id, **step)["invoice"]
+                    question = self._issue_with_the_owners_yes(inv["id"])
+                    self.assertIn("these figures are based on estimates on the quote. Are they final?", question)
+                    self.assertIn("Valve", question)
+                    self.assertNotIn("Install", question)  # only the estimated line's part is named
+                    self.assertEqual(self.store.doc(inv["id"])["status"], "issued")
+                self.assertEqual(len(self.store.job(job_id)["invoices"]), len(steps))
+
+    def test_a_draft_deleted_or_voided_with_estimates_is_remembered(self):
+        """An independent review of 1.0.1: export an estimated draft with --as-spec, strip the mark, delete the
+        draft and make it again, and it issued unasked."""
+        older = docs.invoice_create(self.store, customer_id=self.cust["id"], spec={"title": "Older", "lines": [
+            {"kind": "fee", "description": "Return visit", "unit_price": "60"}]})["invoice"]["id"]  # fmt: skip
+        spec = {"title": "Call-out", "lines": [{"kind": "fee", "description": "Call-out", "unit_price": "89",
+                                                "estimate": True}]}  # fmt: skip
+        draft = docs.invoice_create(self.store, customer_id=self.cust["id"], spec=spec)["invoice"]
+        exported = lines_as_spec(draft["lines"])
+        self.assertTrue(exported[0].get("estimate"))  # the export keeps the mark
+        exported[0].pop("estimate")
+        deleted = docs.invoice_delete(self.store, draft["id"])
+        self.assertIn("never confirmed (Call-out: 1 ea at $89.00 = $89.00 CAD)", deleted["warnings"][0])
+        again = docs.invoice_create(self.store, customer_id=self.cust["id"], spec={"title": "Call-out",
+                                                                                   "lines": exported})  # fmt: skip
+        self.assertEqual(again["invoice"]["id"], draft["id"])  # the same number, released by the delete
+        self.assertIn("deleted or voided with estimates", " ".join(again["warnings"]))
+        question = self._asked(again["invoice"]["id"]).ask_owner
+        self.assertIn("an earlier draft for Jane Doe had estimates you never confirmed. Are these figures final?",
+                      question)  # fmt: skip
+        self._asked(older)  # an older draft for the same customer asks too: its lines could have been copied there
+        self._issue_with_the_owners_yes(again["invoice"]["id"])
+        self.assertNotIn("unconfirmed_estimates", self.store.customer(self.cust["id"]))  # confirmed: cleared
+        self.assertEqual(docs.invoice_issue(self.store, older)["invoice"]["status"], "issued")  # no question now
+        draft = docs.invoice_create(self.store, customer_id=self.cust["id"], spec=spec)["invoice"]
+        voided = owner_approves(docs.invoice_void, self.store, draft["id"], "Wrong job")
+        self.assertIn("never confirmed", voided["warnings"][0])
+        self._asked(self._open_draft())
+
+    def _open_draft(self):
+        spec = {"title": "A", "lines": [{"kind": "fee", "description": "Work", "unit_price": "10"}]}
+        return docs.invoice_create(self.store, customer_id=self.cust["id"], spec=spec)["invoice"]["id"]
+
+    def test_change_orders_are_billed_after_the_quote_is_fully_billed(self):
+        """An independent review: once progress invoices had billed 100% of the quote, an approved change order
+        couldn't be billed ("Nothing left to bill"), and the same after a final invoice."""
+        quote = self._fixed_quote([{"kind": "fee", "description": "Work", "unit_price": "1000"}])
+        job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+        docs.invoice_issue(self.store, docs.invoice_create(self.store, job_id=job_id, progress="100")["invoice"]["id"])
+        with self.assertRaises(JTPError) as caught:  # nothing due at all yet
+            docs.invoice_create(self.store, job_id=job_id)
+        self.assertIn("no approved change orders or extras", caught.exception.message)
+        for title in ("Add valve", "Add tap"):
+            co = docs.co_create(self.store, job_id, {"title": title, "lines": [
+                {"kind": "fee", "description": title, "unit_price": "50"}]})["change_order"]  # fmt: skip
+            docs.co_approve(self.store, co["id"], "Jane", "text", None)
+            inv = docs.invoice_create(self.store, job_id=job_id)["invoice"]  # after 100% progress, then after a final
+            self.assertEqual([ln["description"] for ln in priced(inv["lines"])], [title])
+            docs.invoice_issue(self.store, inv["id"])
+        with self.assertRaises(JTPError):  # asked for the quote itself: it's done
+            docs.invoice_create(self.store, job_id=job_id, from_quote=quote["id"])
+
+    def test_the_setup_hint_only_names_options_that_exist(self):
+        """An independent review: the tax hint suggested profile set --dry-run, which doesn't exist."""
+        profile = self.store.profile()
+        profile["tax"]["confirmed"] = False
+        self.store.save_profile(profile)
+        with self.assertRaises(JTPError) as caught:
+            docs.invoice_create(self.store, customer_id=self.cust["id"], spec={"lines": [
+                {"kind": "fee", "description": "Work", "unit_price": "1"}]})  # fmt: skip
+        self.assertEqual(caught.exception.code, "setup_needed")
+        self.assertNotIn("--dry-run", caught.exception.hint)
 
     def test_a_dry_run_issues_nothing(self):
         """An independent review of 1.0.1: invoice issue --dry-run issued the invoice and used up the owner's code."""
@@ -749,6 +863,7 @@ class WorkflowTests(StoreCase):
         with self.assertRaises(JTPError) as caught:
             docs.invoice_issue(self.store, inv["id"], owner_confirmed="absolutely not")
         self.assertEqual(caught.exception.code, "already_issued")
+        self.assertIn("already issued on 15 Oct 2026", caught.exception.message)  # the owner's date format
         self.assertIn("Nothing was changed", caught.exception.message)
         self.assertTrue(docs.invoice_issue(self.store, inv["id"])["already_issued"])
 
@@ -1048,6 +1163,14 @@ class DocsTests(unittest.TestCase):
         self.assertNotIn("open **Plugins** in the sidebar", readme)
         self.assertIn("\n## Updates\n", readme)
 
+    def test_the_skill_says_hands_off_the_data_files_and_ask_before_co_void_or_payment_undo(self):
+        """An independent review: the SKILL only said not to edit totals, and didn't mention co void or payment
+        undo, which take no code."""
+        skill = (ROOT / "skills" / "job-to-paid" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("never edit the data files by hand", skill)
+        self.assertIn("`jtp co void`", skill)
+        self.assertIn("`jtp payment undo`", skill)
+
     def test_the_skill_never_searches_the_home_folder(self):
         skill = (ROOT / "skills" / "job-to-paid" / "SKILL.md").read_text(encoding="utf-8")
         self.assertNotIn("find ~", skill)
@@ -1145,6 +1268,13 @@ class CliTests(unittest.TestCase):
             code, out = self.run_cli(home, "pricebook", "import", str(Path(tmp) / "missing.csv"))
             self.assertEqual(code, 1)
             self.assertIn("No file", out["error"])
+
+    def test_doctor_on_an_empty_folder_says_how_to_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = self.run_cli(Path(tmp) / "data", "doctor")
+            self.assertEqual((code, out["initialized"]), (0, False))
+            self.assertIn("jtp init --currency", out["next"])
+            self.assertIn("demo", out["next"])
 
     def test_dry_run_previews_or_refuses(self):
         """An independent review of 1.0.1: invoice issue --dry-run issued the invoice for real. An action that

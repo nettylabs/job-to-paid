@@ -285,16 +285,32 @@ def _swap_email(text: str, old: str, new: str) -> str:
 
 def _swap_phone(text: str, old: str, new: str) -> str:
     """The old number, as it was typed or written another way ("+1 604 555 0100", "(604) 555-0100"), becomes the new
-    one. Other numbers (an account number, a date) stay as they are."""
-    digits = re.sub(r"\D", "", old)
+    one. Other numbers stay as they are, even one that ends with the same digits (an account number, a reference)."""
+    return _PHONE.sub(lambda match: new if _same_phone(match.group(), old) else match.group(), text)
 
-    def swap(match):
-        found = re.sub(r"\D", "", match.group())
-        long_enough = min(len(found), len(digits)) >= 7
-        same = found == digits or (long_enough and (digits.endswith(found) or found.endswith(digits)))
-        return new if same else match.group()
 
-    return _PHONE.sub(swap, text)
+def _phone_digits(text: str) -> tuple:
+    """(digits, international): "+1 604 555 0100" and "0044 20 7946 0100" are international; "(604) 555-0100" and
+    "020 7946 0100" are national, with a leading trunk 0 left off."""
+    raw = text.strip()
+    digits = re.sub(r"\D", "", raw)
+    if raw.startswith("+"):
+        return digits, True
+    if digits.startswith("00"):
+        return digits[2:], True
+    return (digits[1:] if digits.startswith("0") else digits), False
+
+
+def _same_phone(a: str, b: str) -> bool:
+    """Whether two written phone numbers are the same: the same digits, or one with its country code (1 to 3 digits)
+    and the other without it. Not a general suffix match: 99916045550100 isn't +1 604 555 0100."""
+    (da, ia), (db, ib) = _phone_digits(a), _phone_digits(b)
+    if da == db:
+        return len(da) >= 7
+    if ia == ib:
+        return False
+    full, national = (da, db) if ia else (db, da)
+    return len(national) >= 7 and full.endswith(national) and 1 <= len(full) - len(national) <= 3
 
 
 def check(profile: dict) -> dict:

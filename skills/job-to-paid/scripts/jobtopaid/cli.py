@@ -326,6 +326,11 @@ def cmd_doctor(store, args):
             "quotes": len(store.docs("quote")),
             "invoices": len(store.docs("invoice")),
         }
+    else:
+        out["next"] = (
+            "Nothing is set up in this folder yet. Set up the business with the owner (references/setup.md), "
+            "starting with: jtp init --currency <CODE>. Or try the demo in a separate folder: jtp --home <folder> demo"
+        )
     return out
 
 

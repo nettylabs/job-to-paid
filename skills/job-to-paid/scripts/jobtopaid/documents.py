@@ -85,9 +85,16 @@ def _require_ready(store, what: str) -> None:
         raise JTPError(
             f"Tax setup isn't confirmed yet, so a {what} could show the wrong tax.",
             hint="Ask the owner which taxes they charge (or confirm none), save them, then: "
-            "jtp profile set tax.confirmed true   (use --dry-run to preview without saving)",
+            "jtp profile set tax.confirmed true",
             code="setup_needed",
         )
+
+
+def _shown_date(store, text) -> str:
+    """A date as the owner writes it (locale.date_format, e.g. 18 Oct 2026), for messages."""
+    from .view import format_date  # local import, as in reports.py
+
+    return format_date(from_iso(text), store.profile()["locale"].get("date_format")) if text else ""
 
 
 def _resolve_job(store, job_id, customer_id, title, site, dry_run, tags=None):
@@ -403,7 +410,7 @@ def quote_accept(
     day = parse_date(date or "today", store.today())
     if doc["valid_until"] and day > from_iso(doc["valid_until"]):
         warnings.append(
-            f"Accepted after the quote's valid-until date ({doc['valid_until']}). "
+            f"Accepted after the quote's valid-until date ({_shown_date(store, doc['valid_until'])}). "
             "Check your prices still hold before booking the work."
         )
     if doc["status"] == "draft":
@@ -762,6 +769,8 @@ def invoice_create(
     kind = "standard"
 
     use_quote = from_quote or progress is not None or deposit_invoice
+    asked_for_quote = bool(use_quote)  # rather than invoice create --job J, which bills whatever is due
+    quote_done = None  # the quote itself is fully billed; approved change orders and extras may still be due
     if not use_quote and not tm and not spec.get("lines"):
         if job.get("accepted_quote"):
             use_quote = True
@@ -794,12 +803,17 @@ def invoice_create(
         billed, billed_tax, billed_pct, final_exists = _quote_billing(store, job, quote["id"])
         source.update({"quote": quote["id"], "option": option["key"]})
         if final_exists:
-            raise JTPError(
-                f"{quote['id']} has already been fully invoiced.",
-                hint="Bill extra work with a change order or --spec lines.",
-            )
+            if asked_for_quote:
+                raise JTPError(
+                    f"{quote['id']} has already been fully invoiced.",
+                    hint=f"Bill extra work with a change order (jtp invoice create --job {job['id']} picks up approved "
+                    "ones) or --spec lines.",
+                )
+            quote_done, kind = quote["id"], "final"
         quote_lines = priced(option["lines"])
-        if progress is not None or deposit_invoice:
+        if quote_done:
+            pass
+        elif progress is not None or deposit_invoice:
             pct = to_decimal(progress if progress is not None else "0", "progress percent")
             if pct <= 0 or pct > HUNDRED - billed_pct:
                 raise JTPError(
@@ -827,6 +841,8 @@ def invoice_create(
                     "display_qty": False,
                     "source": {"quote_line": ln["id"]},
                 }
+                if ln.get("estimate"):
+                    line_spec["estimate"] = True  # part of an estimate is still an estimate until the owner's yes
                 if last:
                     line_spec["tax_fixed"] = _tax_left(store, ln, amount, billed_tax)
                 specs.append(line_spec)
@@ -846,21 +862,24 @@ def invoice_create(
                     if remaining < 0:
                         warnings.append(f"Quote line {ln['id']} was over-billed by {-remaining}; left off.")
                         continue
-                    specs.append(
-                        {
-                            "kind": ln["kind"],
-                            "description": f"{ln['description']} ({labels['balance']})",
-                            "qty": "1",
-                            "unit": "",
-                            "unit_price": dec_str(remaining),
-                            "tax_codes": ln.get("tax_codes", []),
-                            "display_qty": False,
-                            "source": {"quote_line": ln["id"]},
-                            "tax_fixed": _tax_left(store, ln, remaining, billed_tax),
-                        }
-                    )
-        if not specs and kind == "final":
-            raise JTPError(f"Nothing left to bill on {quote['id']}.")
+                    balance_spec = {
+                        "kind": ln["kind"],
+                        "description": f"{ln['description']} ({labels['balance']})",
+                        "qty": "1",
+                        "unit": "",
+                        "unit_price": dec_str(remaining),
+                        "tax_codes": ln.get("tax_codes", []),
+                        "display_qty": False,
+                        "source": {"quote_line": ln["id"]},
+                        "tax_fixed": _tax_left(store, ln, remaining, billed_tax),
+                    }
+                    if ln.get("estimate"):
+                        balance_spec["estimate"] = True
+                    specs.append(balance_spec)
+        if not specs and kind == "final" and not quote_done:
+            if asked_for_quote:
+                raise JTPError(f"Nothing left to bill on {quote['id']}.")
+            quote_done = quote["id"]
     if tm:
         kind = "tm" if kind == "standard" else kind
         entries = [
@@ -919,6 +938,12 @@ def invoice_create(
         specs.append(extra)
 
     if not specs:
+        if quote_done:
+            raise JTPError(
+                f"Nothing left to bill on {job['id']}: {quote_done} is fully invoiced, and there are no approved "
+                "change orders or extras to bill.",
+                hint="Get a change order approved first (jtp co approve CO-...), or bill other work with --spec lines.",
+            )
         raise JTPError("Nothing to put on this invoice.")
     lines, totals, warn, suggestions = build_lines(store, specs, prefix="I")
     warnings += warn
@@ -962,6 +987,11 @@ def invoice_create(
     }
     if any(ln.get("estimate") for ln in lines):
         doc["had_estimates"] = True  # only the owner's yes when issuing clears this (invoice_issue)
+    if _pending_estimates(store, doc["customer_id"]):
+        warnings.append(
+            f"An earlier draft for {customer_label(store, doc['customer_id'])} was deleted or voided with estimates "
+            "the owner never confirmed, so issuing this invoice asks the owner to confirm its figures."
+        )
     if not dry_run:
         store.save_doc(doc)
         job["invoices"].append(doc["id"])
@@ -1116,6 +1146,79 @@ def _update_job_after_money(store, job: dict) -> None:
         job["status"] = "invoiced"
 
 
+def _estimate_lines(inv: dict) -> list:
+    """The lines an invoice's own estimates cover: its marked lines, or every priced line once a mark was renamed
+    or removed (it remembers it had estimates). Empty when it has none, or the owner already confirmed them."""
+    if inv.get("estimates_confirmed"):
+        return []
+    marked = [ln for ln in inv["lines"] if ln.get("estimate")]
+    return marked or (priced(inv["lines"]) if inv.get("had_estimates") else [])
+
+
+def _pending_estimates(store, customer_id) -> list:
+    """Estimates on this customer's deleted or voided drafts that the owner never confirmed (_remember_estimates)."""
+    try:
+        return list(store.customer(customer_id).get("unconfirmed_estimates") or [])
+    except JTPError:
+        return []
+
+
+def _set_pending_estimates(store, customer_id, entries: list) -> None:
+    customers = store.customers()
+    for cust in customers:
+        if cust["id"] == customer_id:
+            if entries:
+                cust["unconfirmed_estimates"] = entries
+            else:
+                cust.pop("unconfirmed_estimates", None)
+    store.save_customers(customers)
+
+
+def _remember_estimates(store, inv: dict, removed: str) -> list:
+    """A draft is being deleted or voided with estimates the owner never confirmed. They're kept on the customer, so
+    the next invoice for them asks the owner to confirm its figures: a copy of the lines without the marks would
+    otherwise issue unasked. Returns the warnings for the agent."""
+    lines = _estimate_lines(inv)
+    if not lines:
+        return []
+    figures = "; ".join(_estimate_figure(ln, store.money()) for ln in lines)
+    entry = {"invoice": inv["id"], "removed": removed, "date": iso(store.today()), "figures": figures}
+    _set_pending_estimates(store, inv["customer_id"], _pending_estimates(store, inv["customer_id"]) + [entry])
+    return [
+        f"{inv['id']} had estimates the owner never confirmed ({figures}). The next invoice for "
+        f"{customer_label(store, inv['customer_id'])} asks the owner to confirm its figures before it's issued."
+    ]
+
+
+def _estimates_question(store, inv: dict) -> tuple:
+    """(the lines to confirm, their figures, the question) before an invoice is issued, or ([], "", None).
+
+    Marked lines are named as estimates (part of a quote's estimate on a progress, deposit or balance invoice).
+    When the marks can't be pinned to lines any more (renamed or removed, or an earlier draft for this customer was
+    deleted or voided with estimates), every figure is named."""
+    own, pending = _estimate_lines(inv), _pending_estimates(store, inv["customer_id"])
+    lines = priced(inv["lines"]) if pending else own
+    if not lines:
+        return [], "", None
+    figures = "; ".join(_estimate_figure(ln, store.money()) for ln in lines)
+    if pending:
+        why = (f"an earlier draft for {customer_label(store, inv['customer_id'])} had estimates you never "
+               "confirmed. Are these figures final?")  # fmt: skip
+    elif not any(ln.get("estimate") for ln in inv["lines"]):
+        why = "it had estimated figures, since changed or removed. Are these figures final?"
+    elif _part_of_quote(inv) and all((ln.get("source") or {}).get("quote_line") for ln in lines):
+        why = "these figures are based on estimates on the quote. Are they final?"
+    else:
+        why = "these figures were estimates. Are they final?"
+    return lines, figures, f"Before I finalize invoice {inv['id']}: {why} {figures}"
+
+
+def _part_of_quote(inv: dict) -> bool:
+    """A progress, deposit or balance invoice: its quote lines bill part of the quote's figures."""
+    source = inv.get("source") or {}
+    return inv.get("kind") in ("progress", "deposit") or bool(source.get("previously_billed_percent"))
+
+
 def _estimate_figure(ln: dict, disp: dict) -> str:
     amount = format_total(to_decimal(ln["amount"]), disp)
     if not ln.get("display_qty", True):
@@ -1139,8 +1242,8 @@ def invoice_issue(
         if inv["status"] in ("issued", "paid"):
             if owner_confirmed and confirm.reads_as_no(owner_confirmed):  # never answer a no with "issued"
                 raise JTPError(
-                    f"{inv['id']} was already issued on {inv['date']}, so the owner's no can't stop it now. Nothing "
-                    "was changed.",
+                    f"{inv['id']} was already issued on {_shown_date(store, inv['date'])}, so the owner's no can't "
+                    "stop it now. Nothing was changed.",
                     hint=f"To cancel it, void it (jtp invoice void {inv['id']}, which asks the owner first), or "
                     "correct it with a credit note.",
                     code="already_issued",
@@ -1161,20 +1264,18 @@ def invoice_issue(
             code="setup_needed",
         )
     estimated = [ln for ln in inv["lines"] if ln.get("estimate")]
-    # An invoice that had estimates needs the owner's yes even if the marks were taken off since: only that yes
-    # clears them. If no line is marked any more, the question names every figure.
-    asked_about = estimated or (priced(inv["lines"]) if inv.get("had_estimates") and not inv.get("estimates_confirmed")
-                                else [])  # fmt: skip
-    said, question = "", None
+    # Estimates need the owner's yes, even if the marks were taken off since or the lines came from a draft that
+    # was deleted: only that yes clears them (_estimates_question).
+    asked_about, figures, question = _estimates_question(store, inv)
+    pending = _pending_estimates(store, inv["customer_id"])
+    said = ""
     if asked_about:
         # Only the owner's plain yes to this exact question counts, sent back with its one-time code. The code
         # covers these figures: if one changes after the owner was asked, they're asked again (confirm.py).
-        disp = store.money()
-        figures = "; ".join(_estimate_figure(ln, disp) for ln in asked_about)
-        question = f"Before I finalize invoice {inv['id']}: these figures were estimates. Are they final? {figures}"
         if not dry_run:  # a preview asks nothing and uses no code; the real run asks
             said = confirm.owner_yes(
-                store.home, f"invoice.issue|{inv['id']}|{figures}", question, owner_confirmed, confirm_code,
+                store.home, f"invoice.issue|{inv['id']}|{figures}|{len(pending)}", question, owner_confirmed,
+                confirm_code,
                 why=f"{inv['id']} has estimated figures. Issuing makes the invoice final, so only the owner can "
                 "confirm them: ask, and wait for their answer.",
                 hint="Ask the owner the question in ask_owner, word for word. Only if they say yes: jtp invoice issue "
@@ -1237,6 +1338,8 @@ def invoice_issue(
         return {"invoice": preview, "dry_run": True, "would_issue": inv["id"], "deposits_applied": applied,
                 **({"owner_question": question} if question else {})}  # fmt: skip
     store.save_doc(inv)
+    if pending and said:  # the owner confirmed this customer's figures, earlier drafts' estimates included
+        _set_pending_estimates(store, inv["customer_id"], [])
     if inv.get("kind") in ("final", "tm", "standard") and job["status"] not in ("paid", "closed"):
         job["status"] = "invoiced"
     _update_job_after_money(store, job)
@@ -1288,13 +1391,14 @@ def invoice_delete(store, ident: str) -> dict:
             hint=f"Void it instead (keeps the number on record): jtp invoice void {inv['id']}",
         )
     job = store.job(inv["job_id"])
+    warnings = _remember_estimates(store, inv, "deleted")
     _link(store, job, inv, attach=False)
     job["invoices"] = [i for i in job["invoices"] if i != inv["id"]]
     store.save_job(job)
     store.delete_doc(inv)
     store.log("invoice.delete", inv["id"])
     removed_job = _drop_empty_auto_job(store, job)
-    return {"deleted": inv["id"], "removed_empty_job": job["id"] if removed_job else None}
+    return {"deleted": inv["id"], "removed_empty_job": job["id"] if removed_job else None, "warnings": warnings}
 
 
 # What a plain yes to "Void invoice ...?" may add ("yes, void it").
@@ -1339,6 +1443,7 @@ def invoice_void(store, ident: str, reason: str | None, owner_confirmed=None, co
     )
     if credit:
         _save_credit(store, inv, credit, said, on_job=False)
+    warnings = _remember_estimates(store, inv, "voided") if inv["status"] == "draft" else []
     job = store.job(inv["job_id"])
     inv["status"] = "void"
     inv["void_reason"] = reason or ""
@@ -1354,6 +1459,7 @@ def invoice_void(store, ident: str, reason: str | None, owner_confirmed=None, co
         "invoice": inv,
         "credit_note": credit,
         "note": "Any time, materials or change orders on it are free to bill again.",
+        "warnings": warnings,
     }
 
 

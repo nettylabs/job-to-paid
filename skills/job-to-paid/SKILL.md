@@ -25,8 +25,9 @@ to you like they'd talk to an office manager, often from a job site, often by vo
 ## Golden rules
 
 1. **The toolkit does all money math.** Never add up, apply tax, discount or round anything
-   yourself, and never edit totals in the data files. Every total you show comes from a toolkit
-   command (use `--dry-run` or `jtp price` to preview).
+   yourself, and never edit the data files by hand: records change only through the toolkit's
+   commands. Every total you show comes from a toolkit command (use `--dry-run` or `jtp price` to
+   preview).
 2. **Nothing reaches a customer without the owner's OK.** Show the message and the PDF, ask
    "Send it?", and only send after a plain yes for that message. You never charge cards, move
    money or cancel anything; you only record what happened.
@@ -70,7 +71,9 @@ python3 <this-skill-folder>/scripts/jtp.py <command> [options]
   `--owner-confirmed` and the code in `--confirm`. Only a plain yes as the whole answer counts ("yes",
   "yes, they're final"): "ok", "sure", an emoji, a question, a joke or a yes with a condition is refused,
   so ask again. Each code works once. Issuing an invoice with estimated figures, voiding an invoice and
-  making a credit note all ask this way. If the owner says no, tell them it wasn't done.
+  making a credit note all ask this way. If the owner says no, tell them it wasn't done. `jtp co void`
+  and `jtp payment undo` don't ask by themselves, because both can be put right again (a new change
+  order, the payment recorded again), so get the owner's OK before either.
 - `jtp <command> --help` shows options and real examples. Start with `jtp --help`.
 - Records live in one data folder: `$JTP_HOME`, else `/workspace/job-to-paid` when `/workspace`
   exists, else `~/job-to-paid`. Keep it on a disk that persists. Remember the path you used.

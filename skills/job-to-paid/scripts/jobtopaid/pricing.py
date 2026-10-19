@@ -154,10 +154,12 @@ def normalize_lines(profile: dict, pricebook: list, specs, places: int, prefix: 
             item_kind = "labour" if item_kind == "labor" else item_kind
             if item_kind in LINE_KINDS and item_kind != kind:
                 if "kind" in spec:  # the price book knows what the item is (a permit is a fee, taxed as one)
-                    warnings.append(
-                        f"Line {index}: the price book lists {item.get('name') or item['id']} as {item_kind}, so it's "
-                        f"billed and taxed as {item_kind}, not {kind}."
-                    )
+                    if "tax_codes" in spec:
+                        how = f"billed as {item_kind}, not {kind} (the line's own tax codes still apply)"
+                    else:
+                        how = f"billed and taxed as {item_kind}, not {kind}"
+                    name = item.get("name") or item["id"]
+                    warnings.append(f"Line {index}: the price book lists {name} as {item_kind}, so it's {how}.")
                 kind = item_kind
                 line["kind"] = kind
 
