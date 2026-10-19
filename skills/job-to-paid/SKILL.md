@@ -13,7 +13,7 @@ description: >-
 license: MIT
 compatibility: Needs Python 3.9+ on the agent's computer. Standard library only, local files only, no network calls.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Job to Paid
@@ -28,15 +28,16 @@ to you like they'd talk to an office manager, often from a job site, often by vo
    yourself, and never edit totals in the data files. Every total you show comes from a toolkit
    command (use `--dry-run` or `jtp price` to preview).
 2. **Nothing reaches a customer without the owner's OK.** Show the message and the PDF, ask
-   "Send it?", and only send after a clear yes for that message. You never charge cards, move
+   "Send it?", and only send after a plain yes for that message. You never charge cards, move
    money or cancel anything; you only record what happened.
 3. **Never guess a price, a tax, or the scope.** Prices come from the owner, their price book or
    their rates. A bare figure for a part is their *cost* (their markup is added), and you say so
    in the preview. If you must estimate (for example from a supplier's website), add
    `"estimate": true` to the line, say where the number came from, and get the owner's OK before
    sending. Estimated lines print "(estimate)" on the quote, so drop the flag once the owner
-   confirms the figure. An invoice won't issue while estimates remain: put the toolkit's question to
-   the owner and pass their exact reply with `--owner-confirmed`. Taxes come only from the profile
+   confirms the figure. An invoice won't issue while estimates remain: put the toolkit's question
+   (`ask_owner`) to the owner word for word and, only if they say yes, pass their exact reply with
+   `--owner-confirmed` and the output's `confirm` code with `--confirm`. Taxes come only from the profile
    the owner confirmed, so don't override a line's tax unless the owner says to. You can look up
    official rates to *suggest*, but you don't decide them, and you never give tax or legal advice.
    Don't add work or promises the owner didn't mention; ask instead.
@@ -58,14 +59,16 @@ python3 <this-skill-folder>/scripts/jtp.py <command> [options]
 ```
 
 `<this-skill-folder>` is the folder containing this SKILL.md. Below, `jtp` means that full command.
-If you can't resolve the path, look for it where plugins are usually installed:
-`find ~ /workspace /opt -path '*job-to-paid/scripts/jtp.py' 2>/dev/null | head -1`.
 
 - Every command prints JSON: `{"ok": true, ...}` or `{"ok": false, "error": "...", "hint": "..."}`.
   When something fails, follow the `hint`; don't work around the toolkit. Status changes (sent,
   accepted, issued, paid...) print a short form of the document plus a `summary`; `show` has everything.
-- **`ask_owner`** in any output is a question only the owner can answer. Ask it, wait for their reply,
-  and never answer it yourself or assume a yes from an earlier, more general OK.
+- **`ask_owner`** in any output is a question only the owner can answer. Ask it word for word, wait for
+  their reply, and never answer it yourself or assume a yes from an earlier, more general OK. When the
+  output also has a `confirm` code, run the command again only if they say yes, with their exact words in
+  `--owner-confirmed` and the code in `--confirm`. Only a plain yes as the whole answer counts ("yes",
+  "yes, they're final"): "ok", "sure", an emoji, a question, a joke or a yes with a condition is refused,
+  so ask again. Each code works once.
 - `jtp <command> --help` shows options and real examples. Start with `jtp --help`.
 - Records live in one data folder: `$JTP_HOME`, else `/workspace/job-to-paid` when `/workspace`
   exists, else `~/job-to-paid`. Keep it on a disk that persists. Remember the path you used.

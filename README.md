@@ -52,6 +52,8 @@ It never decides your taxes for you and isn't tax or legal advice. It applies ex
 ## Safe by design
 
 - **You approve every message.** Nothing goes to a customer until you say so. It never charges cards or moves money.
+- **Only your plain yes counts.** Before an invoice with estimated figures becomes final, it asks you, and only a
+  clear "yes" to that exact question goes through: "ok", "sure", a thumbs-up or "yes, next week" doesn't.
 - **Exact math.** Every total, tax, discount, deposit and balance comes from a tested calculator (Python
   `Decimal`, correct rounding per currency), never from the AI's head. Tax is worked out line by line, so the
   invoice always matches the quote plus approved changes, to the cent.
@@ -62,20 +64,31 @@ It never decides your taxes for you and isn't tax or legal advice. It applies ex
 
 ## Install
 
-**Grok Bot**: open **Plugins** in the sidebar, search for **Job to Paid**, and add it. Then say "set me up".
+**Works today:**
 
-**Cursor**: install **Job to Paid** from the Cursor Marketplace. For a local copy:
-`git clone https://github.com/nettylabs/job-to-paid ~/.cursor/plugins/local/job-to-paid`, then reload.
+- **Any agent with a terminal, Grok Bot included:** point it at this repository and say: *"Clone
+  https://github.com/nettylabs/job-to-paid and follow skills/job-to-paid/SKILL.md."* Then say "set me up".
+- **Claude Code:** `/plugin marketplace add nettylabs/job-to-paid`, then `/plugin install job-to-paid@nettylabs`.
+- **Cursor, as a local copy:** `git clone https://github.com/nettylabs/job-to-paid ~/.cursor/plugins/local/job-to-paid`,
+  then reload.
 
-**Grok Build**: `grok plugin install nettylabs/job-to-paid --trust`
-
-**Claude Code**: `/plugin marketplace add nettylabs/job-to-paid`, then `/plugin install job-to-paid@nettylabs`
-
-**Any agent with a terminal**: point it at this repository and say: *"Clone
-https://github.com/nettylabs/job-to-paid and follow skills/job-to-paid/SKILL.md."*
+**Coming soon:** Job to Paid isn't in the Grok Bot **Plugins** list, the Cursor Marketplace or xAI's Grok Build
+catalog yet. Each one needs a review first, and this section will say when it's live.
 
 Requires Python 3.9 or newer, standard on most Linux machines, including typical agent cloud computers. On a Mac or
 PC without it, install it from python.org. Nothing to `pip install`.
+
+## Updates
+
+Every change gets a new version number and a CHANGELOG entry, and is published here first.
+
+- **A clone:** run `git pull` in its folder, or ask your agent to update it.
+- **Claude Code:** run `claude plugin marketplace update nettylabs`, then `claude plugin update job-to-paid@nettylabs`,
+  and start a new session (or run `/reload-plugins`). For updates to arrive by themselves, open `/plugin`, go to
+  **Marketplaces**, pick **nettylabs** and choose **Enable auto-update**.
+- **The listings, once live:** xAI's Grok Build catalog points at a specific version here, and each new one is
+  reviewed by xAI before it moves. This section will say how updates reach the Grok Bot and Cursor listings once
+  they're live.
 
 ## Try it in two minutes
 

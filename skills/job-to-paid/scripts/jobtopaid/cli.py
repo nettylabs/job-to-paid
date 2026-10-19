@@ -448,9 +448,12 @@ def cmd_pricebook(store, args):
     if args.action == "remove":
         return records.pricebook_remove(store, args.id)
     if args.action == "import":
-        path = Path(args.file).expanduser()
+        name = args.file or args.id  # "pricebook import items.csv": the one name given lands in the first slot
+        if not name:
+            raise JTPError("Which file?", hint="jtp pricebook import items.csv", code="usage")
+        path = Path(name).expanduser()
         if not path.is_file():
-            raise JTPError(f"No file {args.file}.")
+            raise JTPError(f"No file {name}.")
         added, updated, errors = 0, 0, []
         with open(path, newline="", encoding="utf-8-sig") as handle:
             for n, row in enumerate(csv.DictReader(handle), 2):
@@ -762,8 +765,8 @@ def cmd_invoice(store, args):
             if out.get("estimates"):
                 out["next"] = (
                     f"Some figures were estimates on the quote ({'; '.join(out['estimates'])}). Ask the owner for the "
-                    f"real figures and fix the draft if they changed (jtp invoice update {inv_id} --spec ...). Once "
-                    f'they confirm: jtp invoice issue {inv_id} --owner-confirmed "<their exact words>"'
+                    f"real figures and fix the draft if they changed (jtp invoice update {inv_id} --spec ...). Then "
+                    f"run jtp invoice issue {inv_id}: it returns the owner's question (ask_owner) and its code"
                 )
         _render(store, args, out["invoice"], out)
         return out
@@ -781,6 +784,7 @@ def cmd_invoice(store, args):
             args.due_date,
             args.allow_unconfirmed_tax,
             owner_confirmed=args.owner_confirmed,
+            confirm_code=args.confirm,
         )
         confirmed = out["invoice"].get("estimates_confirmed") or {}
         if args.owner_confirmed and confirmed.get("owner_said"):
@@ -1370,6 +1374,7 @@ def build_parser() -> argparse.ArgumentParser:
             "jtp invoice create --job J-0002 --tm            (time and materials from the log)",
             'jtp invoice create --customer C-0003 --spec \'[{"kind":"fee","description":"Service call","unit_price":189}]\'',
             "jtp invoice issue INV-0001",
+            'jtp invoice issue INV-0001 --owner-confirmed "yes, they\'re final" --confirm 1c5e2a0-8d41f2-3f9b27d41c',
             "jtp invoice mark-sent INV-0001 --channel email --to jane@example.com",
             "jtp invoice set INV-0001 --payment-link https://buy.stripe.com/...",
             "jtp invoice list --status overdue",
@@ -1409,8 +1414,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--owner-confirmed",
         metavar="WORDS",
-        help="Issue: the owner's own words confirming the estimated figures (kept on the invoice)",
+        help="Issue: the owner's own words confirming the estimated figures (kept on the invoice); only a plain yes "
+        "counts",
     )
+    p.add_argument("--confirm", metavar="CODE", help="Issue: the code that came with the owner's question (confirm)")
     p.add_argument("--dry-run", action="store_true", help="Preview it (previews/PREVIEW.pdf) without saving")
     p.add_argument("--as-spec", action="store_true")
 
@@ -1602,6 +1609,8 @@ def main(argv=None) -> None:
             payload["hint"] = exc.hint
         if getattr(exc, "ask_owner", None):
             payload["ask_owner"] = exc.ask_owner
+        if getattr(exc, "confirm", None):
+            payload["confirm"] = exc.confirm
         _emit(payload, 1)
     except KeyboardInterrupt:
         _emit({"ok": False, "error": "Interrupted."}, 130)

@@ -4,7 +4,60 @@ Generated from `jtp <command> --help`. Run that for the same text at any time.
 
 Global options (before the command): `--home <data folder>`, `--no-render` (skip automatic PDFs), `--version`.
 
-Every command prints JSON (`brief --text` prints plain text). Errors print `{"ok": false, "error", "hint", "code"}` and exit with code 1 (2 for a mistyped command).
+Every command prints JSON (`brief --text` prints plain text). Errors print `{"ok": false, "error", "hint", "code"}` and exit with code 1 (2 for a mistyped command). An error with `ask_owner` and `confirm` is a question for the owner: ask it, and only on their plain yes run the command again with `--owner-confirmed "<their words>" --confirm <code>`.
+
+```text
+usage: jtp [-h] [--home HOME] [--no-render] [--version] <command> ...
+
+Job to Paid: quotes, change orders, invoices and getting paid. Every command prints JSON.
+
+positional arguments:
+  <command>
+    init       Create the data folder and a blank business profile.
+    doctor     Check Python, the data folder, setup gaps and PDF options.
+    demo       Fill a NEW folder with a demo business, customers, jobs, invoices and a quote.
+    selftest   Run built-in checks (money math, a full job, PDFs) in a temporary folder.
+    profile    Show, check or change business settings.
+    numbering  Set the next number (e.g. to continue from your old invoice numbers).
+    customer   Add, find, show or update customers.
+    pricebook  Your saved items and prices (learned from your quotes).
+    job        Jobs and the work log (time, materials, expenses, notes, photos).
+    quote      Create, revise, send-track, accept or decline quotes. Spec format (JSON): {"title": "Water
+               heater replacement", "intro": "Thanks for having us out...", (optional) "lines": [ (one
+               option) {"kind": "labour", "description": "Install and test", "qty": 4}, uses your labour
+               rate {"kind": "labour", "rate_key": "after_hours", "description": "Call-out", "qty": 1},
+               {"kind": "material", "description": "40 gal heater", "qty": 1, "unit_cost": 980}, cost + your
+               markup {"kind": "material", "pricebook": "PB-0003", "qty": 2}, from your price book {"kind":
+               "fee", "description": "Permit", "unit_price": 175}, {"kind": "discount", "description":
+               "Repeat customer", "percent": 10}, {"kind": "text", "description": "A wording-only line (no
+               price)"}], OR "options": [{"name": "Good", "lines": [...]}, {"name": "Better", "recommended":
+               true, "lines": [...]}], "deposit_percent": 30, or "deposit_amount": 500, (optional, default
+               from your profile) "valid_days": 30, "notes": "...", "terms": "..."} (optional) unit_cost is
+               what the owner pays (markup is added); a bare figure from the owner is a cost. Add
+               "estimate": true to a line whose price still needs confirming. Add "tax_codes": [] (no tax)
+               or ["GST"] only when the owner says that line is taxed differently. --dry-run prices it
+               without saving and writes previews/PREVIEW.pdf to show the owner.
+    co         Change orders: get extra or changed work approved before doing it.
+    invoice    Create, issue, track and correct invoices.
+    credit     Credit notes: the proper way to correct an issued invoice.
+    payment    Record payments and deposits, list them, undo mistakes, make receipts.
+    render     Make (or remake) the PDF/HTML for a document.
+    price      Price some lines without saving anything.
+    followups  What to chase today, and recording what was sent.
+    brief      The money brief: owed, overdue, quotes waiting, unbilled work, today's follow-ups.
+    report     Reports: aging, profit, pricing, tax, sales.
+    export     CSV exports for your accountant or accounting app.
+    search     Find customers, jobs and documents by any words.
+    backup     Zip the whole data folder.
+
+options:
+  -h, --help   show this help message and exit
+  --home HOME  Data folder (default: $JTP_HOME or /workspace/job-to-paid or ~/job-to-paid)
+  --no-render  Don't make PDFs automatically
+  --version    show program's version number and exit
+
+Data folder: --home, else $JTP_HOME, else /workspace/job-to-paid (if /workspace exists), else ~/job-to-paid.
+```
 
 ## init
 
@@ -364,7 +417,8 @@ usage: jtp invoice [-h] [--job JOB] [--customer CUSTOMER] [--spec SPEC] [--title
                    [--payment-link PAYMENT_LINK] [--notes NOTES] [--status STATUS] [--tags TAGS]
                    [--from-quote [FROM_QUOTE]] [--progress PROGRESS] [--deposit-invoice DEPOSIT_INVOICE]
                    [--tm] [--no-change-orders] [--no-extras] [--due-days DUE_DAYS] [--external EXTERNAL]
-                   [--allow-unconfirmed-tax] [--owner-confirmed WORDS] [--dry-run] [--as-spec]
+                   [--allow-unconfirmed-tax] [--owner-confirmed WORDS] [--confirm CODE] [--dry-run]
+                   [--as-spec]
                    {create,update,issue,show,list,mark-sent,set,void,delete} [id]
 
 Create, issue, track and correct invoices.
@@ -401,7 +455,9 @@ options:
   --external EXTERNAL   key=value id in another system, e.g. xero=INV-88
   --allow-unconfirmed-tax
   --owner-confirmed WORDS
-                        Issue: the owner's own words confirming the estimated figures (kept on the invoice)
+                        Issue: the owner's own words confirming the estimated figures (kept on the invoice);
+                        only a plain yes counts
+  --confirm CODE        Issue: the code that came with the owner's question (confirm)
   --dry-run             Preview it (previews/PREVIEW.pdf) without saving
   --as-spec
 
@@ -412,6 +468,7 @@ Examples:
   jtp invoice create --job J-0002 --tm            (time and materials from the log)
   jtp invoice create --customer C-0003 --spec '[{"kind":"fee","description":"Service call","unit_price":189}]'
   jtp invoice issue INV-0001
+  jtp invoice issue INV-0001 --owner-confirmed "yes, they're final" --confirm 1c5e2a0-8d41f2-3f9b27d41c
   jtp invoice mark-sent INV-0001 --channel email --to jane@example.com
   jtp invoice set INV-0001 --payment-link https://buy.stripe.com/...
   jtp invoice list --status overdue

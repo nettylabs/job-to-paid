@@ -14,6 +14,7 @@ import datetime as _dt
 from collections import OrderedDict, defaultdict
 from decimal import Decimal
 
+from . import confirm
 from . import profile as profile_mod
 from .money import (
     HUNDRED,
@@ -1092,8 +1093,14 @@ def _estimate_figure(ln: dict, disp: dict) -> str:
     return f"{ln.get('description') or ln['id']}: {qty} at {price} = {amount}"
 
 
+# What a plain yes to "these figures were estimates: are they final?" may add ("yes, they're final"). Not "right"
+# on its own: "yeah right" isn't a yes.
+ESTIMATES_FINAL_WORDS = ("final", "they're final", "they are final", "that's right", "they're right", "issue it")
+
+
 def invoice_issue(
-    store, ident: str, date=None, due_days=None, due_date=None, allow_unconfirmed_tax=False, owner_confirmed=None
+    store, ident: str, date=None, due_days=None, due_date=None, allow_unconfirmed_tax=False, owner_confirmed=None,
+    confirm_code=None,
 ) -> dict:
     inv = store.doc(ident, "invoice")
     if inv["status"] != "draft":
@@ -1114,18 +1121,24 @@ def invoice_issue(
             code="setup_needed",
         )
     estimated = [ln for ln in inv["lines"] if ln.get("estimate")]
-    said = (owner_confirmed or "").strip()
-    if estimated and (len(said) < 2 or "<" in said or ">" in said):
+    said = ""
+    if estimated:
+        # Only the owner's plain yes to this exact question counts, sent back with its one-time code. The code
+        # covers these figures: if one changes after the owner was asked, they're asked again (confirm.py).
         disp = store.money()
         figures = "; ".join(_estimate_figure(ln, disp) for ln in estimated)
-        raise JTPError(
-            f"{inv['id']} still has estimated figures. Issuing makes the invoice final, so only the owner can "
+        said = confirm.owner_yes(
+            store.home, f"invoice.issue|{inv['id']}|{figures}",
+            f"Before I finalize invoice {inv['id']}: these figures were estimates. Are they final? {figures}",
+            owner_confirmed, confirm_code,
+            why=f"{inv['id']} still has estimated figures. Issuing makes the invoice final, so only the owner can "
             "confirm them: ask, and wait for their answer.",
-            hint=f'If the owner says yes: jtp invoice issue {inv["id"]} --owner-confirmed "<their exact words>" '
-            f"(kept on the invoice). If a figure changed: jtp invoice show {inv['id']} --as-spec > inv.json, fix "
-            f'the line and remove "estimate", then jtp invoice update {inv["id"]} --spec inv.json',
-            code="estimates_unconfirmed",
-            ask_owner=f"Before I finalize invoice {inv['id']}: these figures were estimates. Are they final? {figures}",
+            hint="Ask the owner the question in ask_owner, word for word. Only if they say yes: jtp invoice issue "
+            f'{inv["id"]} --owner-confirmed "<their exact words>" --confirm <the code in confirm> (their words are '
+            f"kept on the invoice). If a figure changed: jtp invoice show {inv['id']} --as-spec > inv.json, fix the "
+            f'line and remove "estimate", then jtp invoice update {inv["id"]} --spec inv.json',
+            ask_code="estimates_unconfirmed",
+            echo=ESTIMATES_FINAL_WORDS,
         )
     day = parse_date(date or "today", store.today())
     if estimated:
@@ -1179,6 +1192,8 @@ def invoice_issue(
     _update_job_after_money(store, job)
     store.save_job(job)
     store.log("invoice.issue", inv["id"], date=inv["date"], due=inv["due_date"])
+    if said:
+        confirm.use(store.home, confirm_code)  # the owner's yes counts once
     return {"invoice": inv, "deposits_applied": applied}
 
 

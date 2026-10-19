@@ -20,17 +20,22 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skills" / "job-to-paid" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from jobtopaid import confirm, pdf  # noqa: E402
 from jobtopaid import documents as docs  # noqa: E402
 from jobtopaid import followups, records, reports  # noqa: E402
 from jobtopaid.demo import demo_profile, seed  # noqa: E402
 from jobtopaid.money import compute_totals, currency_display, format_money  # noqa: E402
 from jobtopaid.pdf import _png_decode  # noqa: E402
-from jobtopaid.pricing import normalize_lines  # noqa: E402
+from jobtopaid.pricing import lines_as_spec, normalize_lines  # noqa: E402
 from jobtopaid.render import render_doc, render_receipt  # noqa: E402
+from jobtopaid.view import build_view  # noqa: E402
 from jobtopaid.store import Store  # noqa: E402
 from jobtopaid.util import JTPError, to_decimal  # noqa: E402
 
 EVERY = ["labour", "material", "equipment", "subcontract", "fee", "other"]
+# Replies an independent review of 1.0.0 saw count as the owner's yes (any two characters did), and more.
+NOT_A_YES = ["ok", "k", "sure", "fine", "maybe", "?", "👍", "👎", "yes jk", "yeah right", "yes, next week",
+             "yes lol jk", "yes once she pays", "ok yes", "yes...", "yes 👍", "yes, 3 hours is right", "absolutely not"]
 
 
 def totals(lines, taxes, places=2, inclusive=False):
@@ -540,16 +545,73 @@ class WorkflowTests(StoreCase):
         created = docs.invoice_create(self.store, job_id=job_id)
         self.assertEqual(created["estimates"], ["Install"])
         inv_id = created["invoice"]["id"]
+        asked = self._asked(inv_id)
+        self.assertIn("Install: 3 hr at $95.00 = $285.00", asked.ask_owner)  # the question for the owner
+        for not_an_answer in ("", " ", "<their exact words>"):
+            with self.assertRaises(JTPError):
+                docs.invoice_issue(self.store, inv_id, owner_confirmed=not_an_answer, confirm_code=asked.confirm)
+        with self.assertRaises(JTPError) as caught:  # a yes with no code isn't tied to the question
+            docs.invoice_issue(self.store, inv_id, owner_confirmed="yes")
+        self.assertEqual(caught.exception.code, "needs_owner")
+        issued = docs.invoice_issue(self.store, inv_id, owner_confirmed="Yes, they're final",
+                                    confirm_code=asked.confirm)["invoice"]  # fmt: skip
+        self.assertFalse([ln for ln in issued["lines"] if ln.get("estimate")])
+        self.assertEqual(issued["estimates_confirmed"]["owner_said"], "Yes, they're final")
+
+    def _estimate_invoice(self, qty=3):
+        quote = self._fixed_quote([{"kind": "labour", "description": "Install", "qty": qty, "estimate": True},
+                                   {"kind": "fee", "description": "Call-out", "unit_price": "80"}])  # fmt: skip
+        job_id = docs.quote_accept(self.store, quote["id"], None, "Jane", "email", None)["job"]
+        return docs.invoice_create(self.store, job_id=job_id)["invoice"]["id"]
+
+    def _asked(self, inv_id):
         with self.assertRaises(JTPError) as caught:
             docs.invoice_issue(self.store, inv_id)
         self.assertEqual(caught.exception.code, "estimates_unconfirmed")
-        self.assertIn("Install: 3 hr at $95.00 = $285.00", caught.exception.ask_owner)  # the question for the owner
-        for not_an_answer in ("", " ", "<their exact words>"):
-            with self.assertRaises(JTPError):
-                docs.invoice_issue(self.store, inv_id, owner_confirmed=not_an_answer)
-        issued = docs.invoice_issue(self.store, inv_id, owner_confirmed="Yes, 3 hours is right")["invoice"]
-        self.assertFalse([ln for ln in issued["lines"] if ln.get("estimate")])
-        self.assertEqual(issued["estimates_confirmed"]["owner_said"], "Yes, 3 hours is right")
+        self.assertTrue(caught.exception.confirm)
+        return caught.exception
+
+    def test_only_a_plain_yes_confirms_the_estimates(self):
+        """An independent review of 1.0.0: a vague "ok" counted as the owner's yes."""
+        inv_id = self._estimate_invoice()
+        code = self._asked(inv_id).confirm
+        for reply in NOT_A_YES:
+            with self.subTest(reply=reply), self.assertRaises(JTPError) as caught:
+                docs.invoice_issue(self.store, inv_id, owner_confirmed=reply, confirm_code=code)
+            self.assertEqual(caught.exception.code, "owner_declined" if reply == "absolutely not" else "unclear_answer")
+            if reply != "absolutely not":
+                self.assertTrue(caught.exception.ask_owner and caught.exception.confirm)  # asked again, with a code
+        self.assertEqual(self.store.doc(inv_id)["status"], "draft")
+        for reply in ("yes", "Yep!", "Yes, they're final.", "yes, issue it", "yes please", "go ahead"):
+            self.assertTrue(confirm.plain_yes(reply, docs.ESTIMATES_FINAL_WORDS), reply)
+        self.assertEqual(docs.invoice_issue(self.store, inv_id, owner_confirmed="yes",
+                                            confirm_code=code)["invoice"]["status"], "issued")  # fmt: skip
+
+    def test_the_yes_belongs_to_one_invoice_and_its_figures_and_counts_once(self):
+        first, second = self._estimate_invoice(), self._estimate_invoice()
+        code = self._asked(first).confirm
+        with self.assertRaises(JTPError) as caught:  # another invoice's code
+            docs.invoice_issue(self.store, second, owner_confirmed="yes", confirm_code=code)
+        self.assertEqual(caught.exception.code, "needs_owner")
+        inv = self.store.doc(first)
+        spec = {"title": inv["title"], "lines": lines_as_spec(inv["lines"])}
+        next(ln for ln in spec["lines"] if ln.get("estimate"))["qty"] = 4  # the figure changed after asking
+        docs.invoice_update(self.store, first, spec)
+        with self.assertRaises(JTPError) as caught:
+            docs.invoice_issue(self.store, first, owner_confirmed="yes", confirm_code=code)
+        self.assertEqual(caught.exception.code, "needs_owner")
+        self.assertIn("4 hr", caught.exception.ask_owner)  # asked afresh, about the new figure
+        fresh = caught.exception.confirm
+        docs.invoice_issue(self.store, first, owner_confirmed="yes", confirm_code=fresh)
+        used = json.loads((self.store.home / confirm.USED_FILE).read_text(encoding="utf-8"))
+        self.assertIn(fresh, used)  # kept until it would have expired, so it never works twice
+        code = confirm.code_for(self.store.home, "invoice.issue|INV-9999|x")
+        self.assertEqual(confirm.owner_yes(self.store.home, "invoice.issue|INV-9999|x", "Final?", "yes", code, why=""),
+                         "yes")  # fmt: skip
+        confirm.use(self.store.home, code)
+        with self.assertRaises(JTPError) as caught:
+            confirm.owner_yes(self.store.home, "invoice.issue|INV-9999|x", "Final?", "yes", code, why="")
+        self.assertIn("already used", caught.exception.message)
 
     def test_deposits_count_as_received(self):
         quote = self._fixed_quote([{"kind": "fee", "description": "Work", "unit_price": "1000"}])
@@ -685,7 +747,53 @@ class WorkflowTests(StoreCase):
         self.assertTrue(reports.search(tmp, "jane")["customers"])
 
 
+def page_starts(view) -> list:
+    """The first text on each page of a rendered view, under the running title (built-in PDF engine)."""
+    seen = {}
+    real = pdf.Canvas.text
+
+    def record(canvas, x, top, text, *args, **kwargs):
+        seen.setdefault(id(canvas.page), []).append(text)
+        return real(canvas, x, top, text, *args, **kwargs)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pdf.Canvas.text = record
+        try:
+            layout = pdf.Layout(view, [])
+            layout.build(Path(tmp) / "x.pdf")
+        finally:
+            pdf.Canvas.text = real
+    title = f"{view['title']} {view['number']}"
+    return [next((t for t in seen.get(id(page), []) if t != title), "") for page in layout.pdf.pages]
+
+
 class RenderTests(StoreCase):
+    def test_the_terms_never_sit_on_a_page_of_their_own(self):
+        """An independent review of 1.0.0: the demo's good/better/best quote had a third page holding only the
+        terms. They now go with the acceptance (or payment) box before them, at any length and paper size."""
+        demo = Store(Path(self.tmp.name) / "demo")
+        quote = demo.doc(seed(demo)["waiting_quote"])
+        for paper in ("letter", "a4"):
+            view = build_view(demo, quote)
+            view["paper"] = paper
+            starts = page_starts(view)
+            self.assertNotIn("TERMS", starts, paper)
+            if paper == "letter":  # three pages: the last starts with the acceptance box, the terms under it
+                self.assertEqual((len(starts), starts[-1]), (3, "ACCEPTANCE"), starts)
+        terms = "Prices include supply and installation as described. " * 4
+        for n in range(1, 45):
+            lines = [{"kind": "fee", "description": f"Item {i}", "unit_price": "10"} for i in range(n)]
+            quote = docs.quote_create(self.store, {"title": "Work", "lines": lines, "terms": terms, "notes": "Thanks"},
+                                      customer_id=self.cust["id"])["quote"]  # fmt: skip
+            invoice = docs.invoice_create(self.store, customer_id=self.cust["id"],
+                                          spec={"title": "Work", "lines": lines})["invoice"]  # fmt: skip
+            for doc in (quote, invoice):
+                for paper in ("letter", "a4"):
+                    view = build_view(self.store, doc)
+                    view["paper"], view["terms"] = paper, view.get("terms") or terms
+                    starts = page_starts(view)
+                    self.assertFalse({"TERMS", "NOTES"} & set(starts[1:]), (doc["id"], n, paper, starts))
+
     def test_pdf_and_html(self):
         quote = docs.quote_create(
             self.store,
@@ -749,6 +857,22 @@ class RenderTests(StoreCase):
         width, height, rgb = _png_decode(png)
         self.assertEqual((width, height), (2, 2))
         self.assertEqual(rgb[:3], bytes([255, 127, 127]))
+
+
+class DocsTests(unittest.TestCase):
+    """An independent review of 1.0.0: the README called the listings live before any was approved."""
+
+    def test_the_readme_says_what_works_today_and_how_updates_arrive(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        install = readme.split("## Install", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("**Works today:**", install)
+        self.assertIn("**Coming soon:**", install)
+        self.assertNotIn("open **Plugins** in the sidebar", readme)
+        self.assertIn("\n## Updates\n", readme)
+
+    def test_the_skill_never_searches_the_home_folder(self):
+        skill = (ROOT / "skills" / "job-to-paid" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertNotIn("find ~", skill)
 
 
 class CliTests(unittest.TestCase):
@@ -827,6 +951,38 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             code, out = self.run_cli(home, "invoice", "frobnicate")
             self.assertEqual((code, out["code"]), (2, "usage"))
+
+    def test_pricebook_import_takes_the_file_as_shown_in_its_example(self):
+        """`jtp pricebook import items.csv` crashed: the file name landed in the id slot (found by running every
+        example in the command reference)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo")
+            (Path(tmp) / "items.csv").write_text("name,kind,price\nBrass tap washer,material,2.50\n",
+                                                 encoding="utf-8")  # fmt: skip
+            code, out = self.run_cli(home, "pricebook", "import", str(Path(tmp) / "items.csv"))
+            self.assertEqual((code, out["added"], out["errors"]), (0, 1, []), out)
+            code, out = self.run_cli(home, "pricebook", "import", str(Path(tmp) / "missing.csv"))
+            self.assertEqual(code, 1)
+            self.assertIn("No file", out["error"])
+
+    def test_the_owners_yes_takes_two_steps(self):
+        """The agent asks the owner the exact question, then sends their words back with the question's code."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo")
+            code, out = self.run_cli(home, "invoice", "create", "--customer", "C-0001", "--spec",
+                                     '[{"kind":"fee","description":"Call-out","unit_price":89,"estimate":true}]')
+            inv = out["invoice"]["id"]
+            code, out = self.run_cli(home, "invoice", "issue", inv)
+            self.assertEqual((code, out["code"]), (1, "estimates_unconfirmed"))
+            self.assertIn("Are they final?", out["ask_owner"])
+            question = out["confirm"]
+            code, out = self.run_cli(home, "invoice", "issue", inv, "--owner-confirmed", "ok", "--confirm", question)
+            self.assertEqual((code, out["code"]), (1, "unclear_answer"))
+            code, out = self.run_cli(home, "invoice", "issue", inv, "--owner-confirmed", "yes, they're final",
+                                     "--confirm", question)  # fmt: skip
+            self.assertEqual((code, out["invoice"]["status"]), (0, "issued"))
 
 
 if __name__ == "__main__":

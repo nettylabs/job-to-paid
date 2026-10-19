@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.1 (2026-10-18)
+
+Fixes from an independent review.
+
+- **Only the owner's plain yes counts.** Issuing an invoice that still has estimated figures asks the owner the
+  exact question and returns a one-time code. It goes ahead only when their whole reply is a plain yes ("yes",
+  "yes, they're final") and comes back with that code. "ok", "k", "sure", a thumbs-up, "yes jk", "yeah right" or
+  "yes, next week" is asked again; "absolutely not" stops it. The code is tied to that invoice and those
+  figures, so a changed figure is asked about afresh, and it works once.
+- **The terms never sit on a page of their own.** When a quote's or invoice's terms don't fit under the last box
+  (acceptance or payment), that box moves to the next page with them. The demo's good/better/best quote on
+  Letter paper no longer ends with a page holding only the terms.
+- **The README is honest about installs.** It leads with what works today (a clone, Claude Code, a local Cursor
+  copy), marks the Grok Bot, Cursor Marketplace and Grok Build listings as coming soon, and says how updates
+  arrive.
+- `jtp pricebook import items.csv`, as its example shows it, no longer crashes (the file name went to the wrong
+  place).
+- The agent no longer suggests searching the home folder for the toolkit.
+- 56 automated tests on Python 3.9, 3.11 and 3.13.
+
 ## 1.0.0 (2026-10-15)
 
 First release.

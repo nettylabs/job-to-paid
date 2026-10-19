@@ -1147,11 +1147,36 @@ class Layout:
             self.y += 26
         self.y += 10
 
+    def _boxed_height(self, lines, link=None) -> float:
+        rows = sum(len(wrap(line, "F1", 9.6, self.content_width - 24)) for line in lines)
+        return 26 + 13 * rows + (30 if link else 0)
+
+    def _acceptance_height(self, block) -> float:
+        lines = [block["text"]] if block.get("text") else []
+        rows = sum(len(wrap(t, "F1", 9.6, self.content_width - 24)) for t in lines)
+        return 30 + 13 * rows + (40 if block.get("signature") else 0)
+
+    def _small_height(self, text) -> float:
+        return 22 + 11 * len(wrap(text, "F1", 8.4, self.content_width)) if text else 0
+
+    def keep_with_fine_print(self, box_height: float, room: float, advance: float) -> None:
+        """Before the last box (the acceptance or payment box), start a new page when the box would fit here but
+        the notes and terms after it wouldn't, and all of them fit on a fresh page. The terms then stay with the
+        box they belong to, instead of sitting on a page of their own. `room` and `advance` are the box's own
+        spacing: the space it needs below it, and how far it moves down the page."""
+        v = self.view
+        fine = sum(self._small_height(v.get(key)) for key in ("notes", "terms", "tax_note"))
+        page_top = 62.0  # where content starts on a new page, under its running title (new_page)
+        box_fits = self.y + box_height + room <= self.bottom
+        all_fit = self.y + box_height + advance + fine <= self.bottom
+        if fine and box_fits and not all_fit and page_top + box_height + advance + fine <= self.bottom:
+            self.new_page()
+
     def boxed(self, heading, lines, link=None, link_label=""):
         wrapped = []
         for line in lines:
             wrapped += wrap(line, "F1", 9.6, self.content_width - 24)
-        height = 26 + 13 * len(wrapped) + (30 if link else 0)
+        height = self._boxed_height(lines, link)
         self.need(height + 8)
         self.c.rect(self.margin, self.y, self.content_width, height, fill=(0.975, 0.976, 0.98), stroke=RULE, radius=5)
         y = self.y + 16
@@ -1172,11 +1197,7 @@ class Layout:
 
     def acceptance(self, block):
         lines = [block["text"]] if block.get("text") else []
-        height = (
-            30
-            + 13 * sum(len(wrap(t, "F1", 9.6, self.content_width - 24)) for t in lines)
-            + (40 if block.get("signature") else 0)
-        )
+        height = self._acceptance_height(block)
         self.need(height + 10)
         self.c.rect(self.margin, self.y, self.content_width, height, stroke=RULE, radius=5)
         y = self.y + 16
@@ -1264,8 +1285,11 @@ class Layout:
             self.y += 12
         payment = v.get("payment")
         if payment and (payment["lines"] or payment.get("link")):
+            if not v.get("acceptance"):
+                self.keep_with_fine_print(self._boxed_height(payment["lines"], payment.get("link")), 8, 12)
             self.boxed(payment["heading"], payment["lines"], payment.get("link"), payment.get("link_label"))
         if v.get("acceptance"):
+            self.keep_with_fine_print(self._acceptance_height(v["acceptance"]), 10, 14)
             self.acceptance(v["acceptance"])
         labels = v["labels"]
         self.small_block(labels["notes"], v.get("notes"))

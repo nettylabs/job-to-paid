@@ -9,6 +9,7 @@ import tempfile
 from decimal import Decimal
 from pathlib import Path
 
+from . import confirm
 from . import documents as docs
 from . import followups, records, reports
 from .money import compute_totals
@@ -482,6 +483,29 @@ def selftest() -> dict:
         finally:
             if old_today:
                 os.environ["JTP_TODAY"] = old_today
+
+    with tempfile.TemporaryDirectory(prefix="jtp-selftest-yes-") as tmp:
+        action, question = "invoice.issue|INV-0001|Install: 3 hr", "Are the figures final?"
+        try:
+            confirm.owner_yes(tmp, action, question, None, None, why="Issuing makes them final.")
+            code = None
+        except JTPError as exc:
+            code = exc.confirm
+        refused = 0
+        for vague in ("ok", "sure", "yes, next week", "yes jk", "👍"):
+            try:
+                confirm.owner_yes(tmp, action, question, vague, code, why="")
+            except JTPError as exc:
+                refused += exc.code == "unclear_answer"
+        plain = bool(code) and confirm.owner_yes(tmp, action, question, "yes", code, why="") == "yes"
+        check("only the owner's plain yes counts (not ok, sure or a yes with a condition)", plain and refused == 5)
+        confirm.use(tmp, code)
+        try:
+            confirm.owner_yes(tmp, action, question, "yes", code, why="")
+            reused = True
+        except JTPError:
+            reused = False
+        check("each confirmation code works once", not reused)
     passed = all(c["ok"] for c in checks)
     return {
         "passed": passed,
