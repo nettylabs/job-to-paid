@@ -10,10 +10,10 @@ Follow-ups from independent rechecks of 1.0.4, and from checks of early builds o
 - **The estimate checks' dates only move the way that asks more.** An estimate that leaves its invoice is dated no
   earlier than the latest date the data folder was used on, and nothing ever moves a recorded date; its 30 days
   count from the computer's date. The owner's yes counts for 30 days from when it's given, never while it's dated
-  later than the computer's date, and never once it's 30 days older than the latest date used. So no clock setting
-  can make an estimate lapse early or a yes last longer, and nothing needs resetting: after a clock that was ahead,
-  the questions may just come more often until the real date catches up. `jtp clock show` shows the dates, and
-  `jtp doctor` says when the computer's date is behind.
+  later than the computer's date, and never once it's 30 days older than the latest date used. So setting the
+  clock back can't make an estimate lapse early, no clock setting makes a yes last longer, and nothing needs
+  resetting: after a clock that was ahead, the questions may just come more often until the real date catches up.
+  `jtp clock show` shows the dates, and `jtp doctor` says when the computer's date is behind.
 - **Time zone names are checked.** `jtp profile set locale.timezone` refuses a name that isn't in the time zone
   database ("Mars/Olympus") or isn't a place ("localtime", "Factory"), and spells one the database's way
   ("europe/london" is Europe/London). `profile check` and `doctor` report an unknown one saved earlier, and an
