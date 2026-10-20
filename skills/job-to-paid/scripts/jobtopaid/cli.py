@@ -323,9 +323,9 @@ def cmd_doctor(store, args):
         clock, latest = store.today(), store.latest_day()
         if latest and latest > clock:
             out["date_note"] = (f"The computer's date ({iso(clock)}) is earlier than the last date this folder "
-                                f"was used ({iso(latest)}), so the estimate checks keep {iso(latest)} until the clock "
-                                "catches up. Check the computer's date and time. If it's right, the owner can go back "
-                                "to it: jtp clock reset (asks them first).")  # fmt: skip
+                                f"was used ({iso(latest)}). Invoices and quotes use the computer's date, but the "
+                                "estimate questions may come more often until the clock catches up. Check the "
+                                "computer's date and time.")  # fmt: skip
         out["counts"] = {
             "customers": len(store.customers()),
             "jobs": len(store.jobs()),
@@ -415,12 +415,8 @@ def cmd_numbering(store, args):
 
 
 def cmd_clock(store, args):
-    if args.action == "show":
-        day, latest, previous = store.today(), store.latest_day(), store.previous_day()
-        return {"computer_date": iso(day), "latest_date": iso(latest or day), "previous_date": iso(previous),
-                "estimate_checks_date": iso(store.record_day()), "clock_behind": bool(latest and latest > day),
-                "can_reset": bool(latest and latest > day and previous and day >= previous)}  # fmt: skip
-    return docs.clock_reset(store, args.owner_confirmed, args.confirm)
+    day, latest = store.today(), store.latest_day()
+    return {"computer_date": iso(day), "latest_date": iso(latest or day), "clock_behind": bool(latest and latest > day)}
 
 
 def _customer_fields(args) -> dict:
@@ -1245,13 +1241,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = _add(
         sub,
         "clock",
-        "Show the dates in use, or go back to the computer's date after its clock was ahead.",
-        ["jtp clock show", "jtp clock reset   (asks the owner first: returns the question and its code)"],
+        "Show the computer's date and the latest date this folder was used.",
+        ["jtp clock show"],
         cmd_clock,
     )
-    p.add_argument("action", choices=["show", "reset"])
-    p.add_argument("--owner-confirmed", metavar="WORDS", help="reset: the owner's own words; only a plain yes counts")
-    p.add_argument("--confirm", metavar="CODE", help="reset: the code that came with the owner's question")
+    p.add_argument("action", choices=["show"])
 
     p = _add(
         sub,

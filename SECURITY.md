@@ -34,20 +34,20 @@
   accents, a plural s, lookalike letters or a 0 or 1 standing for a letter. The owner's yes covers only the
   estimates it was about, for 30 days: a newly marked estimate with the same figure asks again. Both 30 days are
   counted on the computer's clock, in the business's time zone (`locale.timezone`, checked against the time zone
-  database), and the date never goes backwards: the data folder keeps the latest date it was used on (`clock.json`),
-  and an earlier clock reading is ignored, so nothing can be dated in the past. Invoices and quotes use the
-  computer's date as it is. After a clock that was ahead, `jtp clock reset` goes back to the computer's date, only
-  on the owner's two-step yes, and never past the date the folder was last used before its latest one: with the
-  clock set back, it's refused, so nothing already recorded can be dated in the past. `JTP_TODAY` sets the date only
-  in the toolkit's own tests. A record past its 30 days is skipped, never deleted: only the owner's yes removes one,
-  or `jtp customer forget-estimates`, which asks them first. A code proves the question was asked, not who answered:
-  the agent is trusted to ask the owner.
+  database), and the dates only ever move the way that asks more. An estimate that leaves its invoice is dated no
+  earlier than the latest date the data folder was used on (`clock.json`), so setting the clock back can't date it
+  in the past, and nothing ever moves a recorded date. Its 30 days count from the computer's date. The owner's yes
+  counts from the computer's date when it's given, but never while it's dated later than the computer's date, and
+  never once it's 30 days older than the latest date the folder was used on, so no clock setting makes it last
+  longer. Invoices and quotes use the computer's date as it is. `JTP_TODAY` sets the date only in the toolkit's own
+  tests. A record past its 30 days is skipped, never deleted: only the owner's yes removes one, or `jtp customer
+  forget-estimates`, which asks them first. A code proves the question was asked, not who answered: the agent is
+  trusted to ask the owner.
 - **Known limit.** A copied estimate is recognised by its description and its customer. Figures copied to a
   different customer, a copy of an open estimate retyped at a different amount, or a copy under a different
-  description aren't recognised. Setting the computer's clock ahead would end the 30 days early, and if it was
-  ahead on more than one date, `jtp clock reset` can't undo it: the estimate checks keep the later date until the
-  clock catches up. That would be the agent deliberately working against its instructions, which a confirmation
-  step can't prevent.
+  description aren't recognised. Setting the computer's clock ahead makes the 30 days run out early while it stays
+  ahead, and once it's right again the estimate questions may come more often until the real date catches up. That
+  would be the agent deliberately working against its instructions, which a confirmation step can't prevent.
 
 ## Reporting a vulnerability
 

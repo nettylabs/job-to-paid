@@ -83,48 +83,26 @@ class Store:
         return today(self.profile()["locale"].get("timezone") if self.exists() else None)
 
     def record_day(self):
-        """The date the estimate checks stamp and count their 30 days from: today, but never earlier than the latest
-        date anything was saved here. So setting the clock back can't date an estimate taken off an invoice in the
-        past, where it would lapse early. After a clock that was ahead, `jtp clock reset` brings it back."""
+        """The date an estimate that leaves its invoice is stamped with: today, but never earlier than the latest date
+        anything was saved here. Nothing lowers it, so setting the clock back can't date one in the past, where it
+        would lapse early. The owner's yeses lapse 30 days after it, so it can't bring a lapsed one back either."""
         day, latest = self.today(), self.latest_day()
         return latest if latest and latest > day else day
 
-    def _clock(self) -> dict:
-        """clock.json: the latest date anything was saved here, and the previous one, before its last step forward.
-        A field that can't be read counts as missing."""
+    def latest_day(self):
+        """The latest date anything was saved here (clock.json), or None. An unreadable file counts as missing."""
         if self._clock_data is _UNREAD:
             try:
-                data = read_json(self.home / CLOCK_FILE, {}) or {}
-            except JTPError:
-                data = {}
-            self._clock_data = {}
-            for key in ("latest", "previous"):
-                try:
-                    self._clock_data[key] = from_iso(data.get(key))
-                except (AttributeError, TypeError, ValueError):
-                    self._clock_data[key] = None
+                self._clock_data = from_iso((read_json(self.home / CLOCK_FILE, {}) or {}).get("latest"))
+            except (JTPError, AttributeError, TypeError, ValueError):
+                self._clock_data = None
         return self._clock_data
-
-    def latest_day(self):
-        """The latest date anything was saved here (clock.json), or None."""
-        return self._clock()["latest"]
-
-    def previous_day(self):
-        """The date this folder was last used before latest_day(): how far back `jtp clock reset` may go."""
-        return self._clock()["previous"]
 
     def _note_day(self) -> None:
         day, latest = self.today(), self.latest_day()
         if not latest or day > latest:
-            self._save_clock(day, latest)
-
-    def set_latest_day(self, day) -> None:
-        """Only for `jtp clock reset`, on the owner's yes, and never earlier than previous_day()."""
-        self._save_clock(day, self.previous_day())
-
-    def _save_clock(self, latest, previous) -> None:
-        write_json(self.home / CLOCK_FILE, {"latest": iso(latest), **({"previous": iso(previous)} if previous else {})})
-        self._clock_data = {"latest": latest, "previous": previous}
+            write_json(self.home / CLOCK_FILE, {"latest": iso(day)})
+            self._clock_data = day
 
     def money(self) -> dict:
         return currency_display(self.profile()["locale"])

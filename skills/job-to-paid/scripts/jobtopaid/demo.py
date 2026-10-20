@@ -695,8 +695,7 @@ def selftest() -> dict:
             check("a yes to a $1 copy of an $89 estimate doesn't clear it: an $89 copy still asks",
                   asked == "estimates_unconfirmed", asked)  # fmt: skip
             ahead = store.today() + _dt.timedelta(days=3)  # a date already used here, later than the clock
-            used = {"latest": iso(ahead), "previous": iso(ahead - _dt.timedelta(days=1))}  # as if the clock is set back
-            write_json(store.home / "clock.json", used)
+            write_json(store.home / "clock.json", {"latest": iso(ahead)})  # as if the clock is set back
             reopened = Store(store.home)
             gone = docs.invoice_create(reopened, customer_id=eighth, spec={"lines": [dict(repair, estimate=True)]})
             docs.invoice_delete(reopened, gone["invoice"]["id"])
@@ -704,20 +703,22 @@ def selftest() -> dict:
             check("the date never goes backwards: a removed estimate is dated by the latest date already used",
                   dated == iso(ahead), dated)  # fmt: skip
 
-            # 1.0.5: documents use the computer's date; only the owner can go back to it; time zone names are checked.
+            # 1.0.5: documents use the computer's date; the estimate checks' dates only move towards asking more;
+            # time zone names are checked.
             billed = docs.invoice_create(reopened, customer_id=eighth, spec={"lines": service})["invoice"]["id"]
             billed = docs.invoice_issue(reopened, billed)["invoice"]
             check("invoices use the computer's date, even after its clock was ahead",
                   billed["date"] == iso(reopened.today()) and reopened.record_day() == ahead, billed["date"])  # fmt: skip
-            set_back = _refusal(docs.clock_reset, reopened, owner_confirmed="yes", confirm_code="x-y-z")
-            check("a reset with the computer's clock set back is refused", set_back == "clock_set_back"
-                  and reopened.record_day() == ahead, set_back)  # fmt: skip
-            write_json(store.home / "clock.json", {"latest": iso(ahead), "previous": iso(reopened.today())})
-            reopened = Store(store.home)  # the clock was ahead for one run, and is right again
-            asked = _refusal(docs.clock_reset, reopened)
-            _with_owners_yes(docs.clock_reset, reopened)
-            check("going back to the computer's date waits for the owner's yes",
-                  asked == "needs_owner" and reopened.record_day() == reopened.today(), asked)  # fmt: skip
+            write_json(store.home / "clock.json", {"latest": iso(store.today() + _dt.timedelta(days=40))})
+            reopened = Store(store.home)  # the clock set back 40 days
+            gone = docs.invoice_create(reopened, customer_id=eighth, spec={"lines": [dict(call_out, estimate=True)]})
+            docs.invoice_delete(reopened, gone["invoice"]["id"])
+            copy = docs.invoice_create(reopened, customer_id=eighth, spec={"lines": [call_out]})["invoice"]["id"]
+            _with_estimates_yes(docs.invoice_issue, reopened, copy)
+            again = docs.invoice_create(reopened, customer_id=eighth, spec={"lines": [call_out]})["invoice"]["id"]
+            asked = _refusal(docs.invoice_issue, reopened, again)
+            check("a clock set back can't make the owner's yes count for longer than 30 days",
+                  asked == "estimates_unconfirmed", asked)  # fmt: skip
             mars = new_profile("USD")
             mars["locale"]["timezone"] = "Mars/Olympus"
             refused = any("isn't a time zone name" in error for error in validate_profile(mars))

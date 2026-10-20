@@ -1223,10 +1223,11 @@ REMEMBER_DAYS = 30  # how long an estimate that left its invoice (taken off, del
 
 
 def _recent(store, item: dict) -> bool:
-    """An estimate that left its invoice is checked against for REMEMBER_DAYS from when it left, by
-    store.record_day(), which never goes backwards. After that it's skipped but kept: only the owner's yes deletes
-    it."""
-    return str(item.get("date") or "") >= iso(store.record_day() - _dt.timedelta(days=REMEMBER_DAYS))
+    """An estimate that left its invoice is checked against for REMEMBER_DAYS from when it left. That's counted from
+    the computer's date, so a clock set back only makes more of them count. It's dated when it leaves by
+    store.record_day(), which is never earlier than a date already used, so it can't be dated in the past. After
+    REMEMBER_DAYS it's skipped but kept: only the owner's yes deletes it."""
+    return str(item.get("date") or "") >= iso(store.today() - _dt.timedelta(days=REMEMBER_DAYS))
 
 
 def _taken_off(store, inv: dict) -> list:
@@ -1318,10 +1319,13 @@ CONFIRMED_KEPT = 200  # the most yeses kept per customer, the newest
 def _confirmations(store, customer_id) -> list:
     """The owner's yeses to lines that matched an estimate elsewhere, as {"source", "key", "amount", "date"}: the
     amount is what the matching lines on that invoice added up to. Each covers only the estimate it was about (its
-    source and description), and only for CONFIRMED_DAYS."""
+    source and description), for CONFIRMED_DAYS from the computer's date when it was given. It stops counting once
+    it's that much older than the latest date already used (store.record_day), so setting the clock back can't bring
+    it back. It doesn't count while it's dated after the computer's date, as when given with the clock ahead."""
     since = iso(store.record_day() - _dt.timedelta(days=CONFIRMED_DAYS))
+    until = iso(store.today())
     return [c for c in _customer_field(store, customer_id, "confirmed_figures")
-            if c.get("source") and str(c.get("date") or "") >= since]  # fmt: skip
+            if c.get("source") and since <= str(c.get("date") or "") <= until]  # fmt: skip
 
 
 def _confirmed_up_to(item: dict, confirmations: list):
@@ -1518,7 +1522,7 @@ def _note_confirmed(store, customer_id, matches: list) -> None:
     for ln, hits in matches:
         for s in hits:
             totals[s["source"], s["key"]] = totals.get((s["source"], s["key"]), ZERO) + to_decimal(_amount(ln))
-    today = iso(store.record_day())
+    today = iso(store.today())  # a yes is never dated later than the computer's date: it can't count longer
     added = [{"source": source, "key": key, "amount": format(total.normalize(), "f"), "date": today}
              for (source, key), total in totals.items()]  # fmt: skip
     if added:
@@ -1577,74 +1581,6 @@ def forget_estimates(store, customer_id: str, owner_confirmed=None, confirm_code
     store.log("customer.forget_estimates", cust["id"], owner_said=said, forgotten=listed)
     confirm.use(store.home, confirm_code)  # the owner's yes counts once
     return {"customer": cust["id"], "forgotten": listed, "owner_said": said}
-
-
-# What may follow the owner's plain yes to "... go back to it?" ("yes, go back"). Not a yes on their own.
-RESET_WORDS = ("go back", "go back to it", "reset it", "reset", "use it")
-
-
-def clock_reset(store, owner_confirmed=None, confirm_code=None) -> dict:
-    """Go back to the computer's date after its clock was ahead, on the owner's plain yes. The estimate checks' date
-    never goes backwards (Store.record_day), so this is the only way back. It never goes back past the date the
-    folder was last used before its latest one (Store.previous_day): with the clock set back, it's refused, so a
-    recorded estimate can't be dated in the past. So only a clock that was ahead on one date can be undone."""
-    day, latest, previous = store.today(), store.latest_day(), store.previous_day()
-    if not latest or latest <= day:
-        return {"computer_date": iso(day), "latest_date": iso(latest or day),
-                "note": f"Nothing to reset: the computer's date ({iso(day)}) isn't behind the latest date used."}  # fmt: skip
-    if not previous or day < previous:
-        last = f"{iso(previous)}, the date this folder was last used before {iso(latest)}" if previous else iso(latest)
-        raise JTPError(
-            f"The computer's date ({iso(day)}) is earlier than {last}, so the computer's clock looks set back. Nothing "
-            "was changed.",
-            hint=f"Check the computer's date and time. The estimate checks keep {iso(latest)} until the clock catches "
-            "up, and invoices and quotes use the computer's date. Only a clock that was ahead on one date can be "
-            "undone with jtp clock reset.",
-            code="clock_set_back",
-        )
-    was, now = _shown_date(store, iso(latest)), _shown_date(store, iso(day))
-    question = (f"The computer's clock was ahead, so Job to Paid has been using {was} as today's date for its estimate "
-                f"questions. The computer now says it's {now}. If that's today's real date, go back to it?")
-    said = confirm.owner_yes(
-        store.home, f"clock.reset|{iso(latest)}|{iso(day)}", question, owner_confirmed, confirm_code,
-        why="Going back to an earlier date changes how long removed estimates are checked for, so only the owner can "
-        "approve it, after checking the date: ask, and wait for their answer.",
-        echo=RESET_WORDS,
-    )
-    moved = _bring_back_record_dates(store, iso(day))
-    store.set_latest_day(day)
-    store.log("clock.reset", None, owner_said=said, was=iso(latest), now=iso(day), records=moved)
-    confirm.use(store.home, confirm_code)  # the owner's yes counts once
-    return {"computer_date": iso(day), "was": iso(latest), "records_moved": moved, "owner_said": said}
-
-
-def _bring_back_record_dates(store, day: str) -> int:
-    """Estimate records dated after `day`, made while the clock was ahead, are dated `day`: they're checked for 30
-    days from today rather than from the wrong date. Returns how many dates moved."""
-    moved = 0
-
-    def back(item: dict) -> None:
-        nonlocal moved
-        if str(item.get("date") or "") > day:
-            item["date"], moved = day, moved + 1
-
-    customers = store.customers()
-    for cust in customers:
-        for entry in cust.get("unconfirmed_estimates") or []:
-            back(entry)
-            for line in entry.get("lines") or []:
-                back(line)
-        for yes in cust.get("confirmed_figures") or []:
-            back(yes)
-    if moved:
-        store.save_customers(customers)
-    for inv in store.docs("invoice"):
-        before = moved
-        for item in inv.get("removed_estimates") or []:
-            back(item)
-        if moved != before:
-            store.save_doc(inv)
-    return moved
 
 
 def _remember_changed(store, inv: dict, taken_off: list) -> None:

@@ -2,17 +2,18 @@
 
 ## 1.0.5 (2026-10-19)
 
-Follow-ups from independent rechecks of 1.0.4, and from a check of an early build of 1.0.5.
+Follow-ups from independent rechecks of 1.0.4, and from checks of early builds of 1.0.5.
 
 - **Invoices and quotes use the computer's date.** Only the estimate checks keep a date that never goes backwards.
   Before, a computer clock that was ahead even once, or a time zone switched and back late in the day, dated every
   later quote, invoice and due date ahead until the real date caught up.
-- **`jtp clock reset`** goes back to the computer's date after its clock was ahead, on the owner's two-step yes. The
-  question asks them to make sure that date is really today. Estimate records dated after it are brought back to
-  it, so they're checked for 30 days from today. It never goes back past the date the data folder was last used
-  before its latest one (`clock.json` keeps both): with the computer's clock set back, it's refused before asking,
-  so nothing already recorded can be dated in the past. `jtp clock show` shows the dates, and `jtp doctor` points
-  to the reset when the computer's date is behind.
+- **The estimate checks' dates only move the way that asks more.** An estimate that leaves its invoice is dated no
+  earlier than the latest date the data folder was used on, and nothing ever moves a recorded date; its 30 days
+  count from the computer's date. The owner's yes counts for 30 days from when it's given, never while it's dated
+  later than the computer's date, and never once it's 30 days older than the latest date used. So no clock setting
+  can make an estimate lapse early or a yes last longer, and nothing needs resetting: after a clock that was ahead,
+  the questions may just come more often until the real date catches up. `jtp clock show` shows the dates, and
+  `jtp doctor` says when the computer's date is behind.
 - **Time zone names are checked.** `jtp profile set locale.timezone` refuses a name that isn't in the time zone
   database ("Mars/Olympus") or isn't a place ("localtime", "Factory"), and spells one the database's way
   ("europe/london" is Europe/London). `profile check` and `doctor` report an unknown one saved earlier, and an
@@ -20,7 +21,7 @@ Follow-ups from independent rechecks of 1.0.4, and from a check of an early buil
   time.
 - **SECURITY.md** says that copies within the amount the owner said yes to aren't asked about again, however many
   there are, and that yeses on separate invoices aren't added together.
-- 112 automated tests on Python 3.9, 3.11 and 3.13, and a 51-check self-test.
+- 114 automated tests on Python 3.9, 3.11 and 3.13, and a 50-check self-test.
 
 ## 1.0.4 (2026-10-19)
 
