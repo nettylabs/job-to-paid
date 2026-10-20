@@ -9,6 +9,7 @@ import os
 import re
 import tempfile
 import time
+import unicodedata
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -83,9 +84,15 @@ def trim_decimal(value: Decimal) -> str:
 # --------------------------------------------------------------------------
 
 
+# Only the unit tests turn this on, so that JTP_TODAY can stand in for the date there. Ordinary commands ignore
+# JTP_TODAY: moving "today" would let a dated record (an estimate taken off an invoice, the owner's yes) lapse early
+# or be dated in the past.
+TEST_DATES = False
+
+
 def today(tz_name: str | None = None) -> _dt.date:
-    """Today's date in the business's time zone (JTP_TODAY overrides, for tests)."""
-    override = os.environ.get("JTP_TODAY")
+    """Today's date in the business's time zone, from the computer's clock (JTP_TODAY in the unit tests only)."""
+    override = os.environ.get("JTP_TODAY") if TEST_DATES else None
     if override:
         try:
             return _dt.date.fromisoformat(override.strip())
@@ -216,3 +223,30 @@ def safe_id_part(text: str) -> str:
     """Keep document number prefixes filesystem-safe."""
     cleaned = re.sub(r"[^A-Za-z0-9_-]", "", text or "")
     return cleaned
+
+
+# Letters from other scripts, and a few Latin ones, that look like plain Latin letters. Folded to them when
+# comparing what people type (line descriptions, customer names), so a lookalike can't make a copy look new.
+LOOKALIKE_LETTERS = str.maketrans({
+    # Cyrillic
+    "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o", "р": "p", "с": "c", "т": "t", "у": "y",
+    "х": "x", "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "һ": "h", "ӏ": "l", "ԛ": "q", "ԝ": "w",
+    # Greek
+    "α": "a", "β": "b", "ε": "e", "η": "n", "ι": "i", "κ": "k", "μ": "m", "ν": "v", "ο": "o", "ρ": "p", "τ": "t",
+    "υ": "u", "χ": "x",
+    # Armenian
+    "օ": "o", "ս": "u", "հ": "h", "ո": "n", "ց": "g", "զ": "q",
+    # Latin letters that look like others
+    "ɑ": "a", "ɡ": "g", "ı": "i", "ȷ": "j", "ɩ": "i", "ʋ": "u",
+    # Latin small capitals
+    "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ꜰ": "f", "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j", "ᴋ": "k",
+    "ʟ": "l", "ᴍ": "m", "ɴ": "n", "ᴏ": "o", "ᴘ": "p", "ꞯ": "q", "ʀ": "r", "ꜱ": "s", "ᴛ": "t", "ᴜ": "u", "ᴠ": "v",
+    "ᴡ": "w", "ʏ": "y", "ᴢ": "z",
+})
+
+
+def fold_letters(text) -> str:
+    """Text folded for comparing what people type: accents dropped, case and lookalike letters ignored ("Jane Doé"
+    and "Jаne Doe" with a Cyrillic а are both "jane doe")."""
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(ch for ch in text if not unicodedata.combining(ch)).casefold().translate(LOOKALIKE_LETTERS)

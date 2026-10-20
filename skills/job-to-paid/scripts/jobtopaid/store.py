@@ -9,6 +9,7 @@ back up, or hand to an accountant.
     <home>/docs/<type>/Q-0001.json   (quote, invoice, change_order, credit_note)
     <home>/output/              rendered PDFs and HTML
     <home>/activity.jsonl       append-only audit trail
+    <home>/clock.json           the latest date anything was saved, so dates never go backwards
 """
 
 from __future__ import annotations
@@ -19,10 +20,12 @@ from pathlib import Path
 
 from . import profile as profile_mod
 from .money import currency_display
-from .util import JTPError, file_lock, now_stamp, read_json, safe_id_part, today, write_json
+from .util import JTPError, file_lock, from_iso, iso, now_stamp, read_json, safe_id_part, today, write_json
 
 DOC_TYPES = ("quote", "invoice", "change_order", "credit_note")
 COUNTER_KEYS = ("quote", "invoice", "change_order", "credit_note", "job", "customer", "payment", "pricebook")
+CLOCK_FILE = "clock.json"
+_UNREAD = object()
 
 
 def default_home() -> Path:
@@ -39,6 +42,7 @@ class Store:
     def __init__(self, home: Path):
         self.home = Path(home).expanduser().resolve()
         self._profile = None
+        self._latest = _UNREAD
 
     # ------------------------------------------------------------------ paths
     @property
@@ -74,8 +78,30 @@ class Store:
         write_json(self.profile_path, data)
         self._profile = profile_mod.merged(data)
 
-    def today(self):
+    def clock_day(self):
+        """The computer's date in the business's time zone (locale.timezone)."""
         return today(self.profile()["locale"].get("timezone") if self.exists() else None)
+
+    def today(self):
+        """The business's date: the computer's, but never earlier than the latest date anything was saved here. So
+        setting the clock back can't date an estimate taken off an invoice in the past, where it would lapse early."""
+        day, latest = self.clock_day(), self.latest_day()
+        return latest if latest and latest > day else day
+
+    def latest_day(self):
+        """The latest date anything was saved here (clock.json), or None."""
+        if self._latest is _UNREAD:
+            try:
+                self._latest = from_iso((read_json(self.home / CLOCK_FILE, {}) or {}).get("latest"))
+            except (JTPError, AttributeError, TypeError, ValueError):  # unreadable: as if missing
+                self._latest = None
+        return self._latest
+
+    def _note_day(self) -> None:
+        day = self.today()
+        if day != self.latest_day():
+            write_json(self.home / CLOCK_FILE, {"latest": iso(day)})
+            self._latest = day
 
     def money(self) -> dict:
         return currency_display(self.profile()["locale"])
@@ -218,3 +244,4 @@ class Store:
         self.home.mkdir(parents=True, exist_ok=True)
         with open(self.home / "activity.jsonl", "a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        self._note_day()  # every change is logged: keep its date, so later dates are never earlier

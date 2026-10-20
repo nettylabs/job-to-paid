@@ -320,6 +320,11 @@ def cmd_doctor(store, args):
         out["write_error"] = str(exc)
     if store.exists():
         out["setup"] = profile_mod.check(store.profile())
+        clock, latest = store.clock_day(), store.latest_day()
+        if latest and latest > clock:
+            out["date_note"] = (f"The computer's date ({iso(clock)}) is earlier than the last date this folder "
+                                f"was used ({iso(latest)}), so Job to Paid keeps using {iso(latest)} until the clock "
+                                "catches up: dates never go backwards. Check the computer's date and time.")  # fmt: skip
         out["counts"] = {
             "customers": len(store.customers()),
             "jobs": len(store.jobs()),
@@ -428,6 +433,9 @@ def cmd_customer(store, args):
         return reports.customer_summary(store, args.id)
     if args.action == "update":
         return records.customer_update(store, args.id, _customer_fields(args))
+    if args.action == "forget-estimates":
+        _need_id(args, "customer", "C-0001")
+        return docs.forget_estimates(store, args.id, args.owner_confirmed, args.confirm)
     raise JTPError("Unknown customer action.")
 
 
@@ -1230,10 +1238,11 @@ def build_parser() -> argparse.ArgumentParser:
             "jtp customer list --search jane",
             "jtp customer show C-0001",
             "jtp customer update C-0001 --preferred whatsapp",
+            "jtp customer forget-estimates C-0001   (asks the owner first: returns the question and its code)",
         ],
         cmd_customer,
     )
-    p.add_argument("action", choices=["add", "list", "show", "update"])
+    p.add_argument("action", choices=["add", "list", "show", "update", "forget-estimates"])
     p.add_argument("id", nargs="?")
     for flag in (
         "--name",
@@ -1250,6 +1259,12 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         p.add_argument(flag, help=FLAG_HELP.get(flag))
     p.add_argument("--preferred", choices=list(records.CONTACT_CHANNELS))
+    p.add_argument(
+        "--owner-confirmed",
+        metavar="WORDS",
+        help="forget-estimates: the owner's own words; only a plain yes counts",
+    )
+    p.add_argument("--confirm", metavar="CODE", help="forget-estimates: the code that came with the owner's question")
 
     p = _add(
         sub,
@@ -1636,7 +1651,12 @@ READ_ONLY = {"doctor", "selftest", "brief", "report", "search", "price", "render
 
 def main(argv=None) -> None:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, unknown = parser.parse_known_args(argv)
+    if "--dry-run" in unknown:  # a command with no --dry-run of its own refuses it below, saying why
+        unknown.remove("--dry-run")
+        args.dry_run = True
+    if unknown:
+        parser.error("unrecognized arguments: " + " ".join(unknown))
     if not args.command:
         parser.print_help()
         sys.exit(0)
@@ -1649,9 +1669,10 @@ def main(argv=None) -> None:
     store = _store(args)
     try:
         previews = DRY_RUN_ACTIONS.get(args.command, ()) + ("show", "list")
-        if getattr(args, "dry_run", False) and args.action not in previews:
+        action = getattr(args, "action", None)
+        if getattr(args, "dry_run", False) and action not in previews:
             raise JTPError(
-                f"--dry-run doesn't work with {args.command} {args.action}, so nothing was done.",
+                f"--dry-run doesn't work with {' '.join(filter(None, (args.command, action)))}, so nothing was done.",
                 hint="It previews " + ", ".join(f"{c} {a}" for c, acts in DRY_RUN_ACTIONS.items() for a in acts) + ".",
                 code="usage",
             )

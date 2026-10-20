@@ -6,7 +6,7 @@ import re
 
 from . import profile as profile_mod
 from .money import q
-from .util import JTPError, dec_str, iso, now_stamp, parse_date, to_decimal, trim_decimal
+from .util import JTPError, dec_str, fold_letters, iso, now_stamp, parse_date, to_decimal, trim_decimal
 
 JOB_STATUSES = (
     "lead",
@@ -117,7 +117,7 @@ def _namesake_warnings(customers: list, cust: dict) -> list:
 
 
 def _name_key(name) -> str:
-    return " ".join(str(name or "").split()).casefold()
+    return " ".join(fold_letters(name).split())
 
 
 def customer_update(store, ident: str, data: dict) -> dict:

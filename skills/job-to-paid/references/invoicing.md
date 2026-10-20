@@ -24,7 +24,9 @@ and issue again: the old answer no longer counts, because the question names the
 owner's yes when issuing clears an estimate, and one changed or taken off a draft is named in its
 question. A line that repeats an estimate the owner hasn't confirmed for the same customer (from another
 draft, a change order or a quote, or one taken off, deleted or voided) is asked about too, even without
-the mark: the output warns when you create or update such an invoice. If the owner says yes, issue
+the mark: the output warns when you create or update such an invoice. If the owner says those estimates
+won't be billed, `jtp customer forget-estimates C-0003` stops the checks for that customer (it asks them
+first). If the owner says yes, issue
 with `--owner-confirmed "<their exact words>" --confirm <code>`. Only a plain yes
 as the whole answer counts ("yes", "yes, they're final"); "ok", "sure", an emoji or a yes with a
 condition is refused (`unclear_answer`), so ask again, and a no stops it (`owner_declined`). Their reply

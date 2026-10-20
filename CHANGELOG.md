@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.4 (2026-10-19)
+
+Fixes from independent checks of 1.0.3 and of an early build of 1.0.4.
+
+- **Removed estimates ask once per amount, for 30 days.** An estimate that left its invoice (changed or taken off a
+  draft, deleted or voided) is still asked about on another invoice with its description. The owner's yes to such
+  a line confirms the estimate up to that line's amount: a copy up to it isn't asked about again, a bigger one is,
+  and a yes that reaches the estimate's own figure clears it. So a yes to a $1 copy doesn't clear an $89 estimate.
+  Before, a deleted "Labour 8 h" made the next several "Labour 2 h" invoices ask, and "Extra labour" or "Spare
+  parts" asked months later.
+- **The 30 days can't be moved.** They're counted on the computer's clock, and the date never goes backwards: the
+  data folder keeps the latest date it was used on (`clock.json`), so a removal can't be dated in the past.
+  `JTP_TODAY` now sets the date only in the toolkit's own tests. A record past its 30 days is skipped, never
+  deleted: only the owner's yes or `forget-estimates` removes it. `jtp doctor` says when the computer's clock is
+  behind that date.
+- **An honest re-price isn't "taken off".** An estimate re-priced on its own invoice and confirmed there is cleared
+  up to its new figure: Call-out $89 to $99 is cleared, $89 to $1 is confirmed only up to $1. While that invoice is
+  a draft, the old figure is checked at any amount. A genuine removal is still remembered.
+- **A $0 line never asks** as a copy of an estimate ("Call-out (waived)").
+- **The owner's question** names each matching estimate with its figure, once.
+- **`jtp customer forget-estimates`** stops the checks against a customer's removed estimates, after the owner's
+  two-step yes ("Forget these estimates…?"). `--dry-run` on a command that can't preview says so.
+- **More retypes are recognised:** "Callout fee", "Call-outs" (a plural s), an Armenian օ, a Latin ɑ, small
+  capitals (ᴀ) and a 0 or 1 standing for a letter. The duplicate-name warning folds accents and lookalike letters
+  too ("Jane Doé").
+- 107 automated tests on Python 3.9, 3.11 and 3.13, and a 47-check self-test.
+
 ## 1.0.3 (2026-10-19)
 
 Fixes from an independent recheck of 1.0.2.
