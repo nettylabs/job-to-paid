@@ -42,7 +42,7 @@ class Store:
     def __init__(self, home: Path):
         self.home = Path(home).expanduser().resolve()
         self._profile = None
-        self._latest = _UNREAD
+        self._clock_data = _UNREAD
 
     # ------------------------------------------------------------------ paths
     @property
@@ -89,24 +89,42 @@ class Store:
         day, latest = self.today(), self.latest_day()
         return latest if latest and latest > day else day
 
+    def _clock(self) -> dict:
+        """clock.json: the latest date anything was saved here, and the previous one, before its last step forward.
+        A field that can't be read counts as missing."""
+        if self._clock_data is _UNREAD:
+            try:
+                data = read_json(self.home / CLOCK_FILE, {}) or {}
+            except JTPError:
+                data = {}
+            self._clock_data = {}
+            for key in ("latest", "previous"):
+                try:
+                    self._clock_data[key] = from_iso(data.get(key))
+                except (AttributeError, TypeError, ValueError):
+                    self._clock_data[key] = None
+        return self._clock_data
+
     def latest_day(self):
         """The latest date anything was saved here (clock.json), or None."""
-        if self._latest is _UNREAD:
-            try:
-                self._latest = from_iso((read_json(self.home / CLOCK_FILE, {}) or {}).get("latest"))
-            except (JTPError, AttributeError, TypeError, ValueError):  # unreadable: as if missing
-                self._latest = None
-        return self._latest
+        return self._clock()["latest"]
+
+    def previous_day(self):
+        """The date this folder was last used before latest_day(): how far back `jtp clock reset` may go."""
+        return self._clock()["previous"]
 
     def _note_day(self) -> None:
         day, latest = self.today(), self.latest_day()
         if not latest or day > latest:
-            self.set_latest_day(day)
+            self._save_clock(day, latest)
 
     def set_latest_day(self, day) -> None:
-        """Only for _note_day, and for `jtp clock reset` on the owner's yes."""
-        write_json(self.home / CLOCK_FILE, {"latest": iso(day)})
-        self._latest = day
+        """Only for `jtp clock reset`, on the owner's yes, and never earlier than previous_day()."""
+        self._save_clock(day, self.previous_day())
+
+    def _save_clock(self, latest, previous) -> None:
+        write_json(self.home / CLOCK_FILE, {"latest": iso(latest), **({"previous": iso(previous)} if previous else {})})
+        self._clock_data = {"latest": latest, "previous": previous}
 
     def money(self) -> dict:
         return currency_display(self.profile()["locale"])

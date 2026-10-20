@@ -34,7 +34,18 @@ from .money import (
 )
 from .pricing import lines_as_spec, normalize_lines
 from .records import job_create
-from .util import JTPError, dec_str, fold_letters, from_iso, iso, now_stamp, parse_date, to_decimal, trim_decimal
+from .util import (
+    JTPError,
+    dec_str,
+    fold_letters,
+    from_iso,
+    iso,
+    now_stamp,
+    parse_date,
+    to_decimal,
+    trim_decimal,
+    zone_name,
+)
 
 QUOTE_STATUSES = ("draft", "sent", "accepted", "declined", "expired", "superseded", "void")
 OPEN_QUOTE = ("draft", "sent", "expired")
@@ -1574,12 +1585,23 @@ RESET_WORDS = ("go back", "go back to it", "reset it", "reset", "use it")
 
 def clock_reset(store, owner_confirmed=None, confirm_code=None) -> dict:
     """Go back to the computer's date after its clock was ahead, on the owner's plain yes. The estimate checks' date
-    never goes backwards (Store.record_day), so this is the only way back; the owner is asked to make sure the
-    computer's date is really today, because going back with a clock set back would date removals in the past."""
-    day, latest = store.today(), store.latest_day()
+    never goes backwards (Store.record_day), so this is the only way back. It never goes back past the date the
+    folder was last used before its latest one (Store.previous_day): with the clock set back, it's refused, so a
+    recorded estimate can't be dated in the past. So only a clock that was ahead on one date can be undone."""
+    day, latest, previous = store.today(), store.latest_day(), store.previous_day()
     if not latest or latest <= day:
         return {"computer_date": iso(day), "latest_date": iso(latest or day),
                 "note": f"Nothing to reset: the computer's date ({iso(day)}) isn't behind the latest date used."}  # fmt: skip
+    if not previous or day < previous:
+        last = f"{iso(previous)}, the date this folder was last used before {iso(latest)}" if previous else iso(latest)
+        raise JTPError(
+            f"The computer's date ({iso(day)}) is earlier than {last}, so the computer's clock looks set back. Nothing "
+            "was changed.",
+            hint=f"Check the computer's date and time. The estimate checks keep {iso(latest)} until the clock catches "
+            "up, and invoices and quotes use the computer's date. Only a clock that was ahead on one date can be "
+            "undone with jtp clock reset.",
+            code="clock_set_back",
+        )
     was, now = _shown_date(store, iso(latest)), _shown_date(store, iso(day))
     question = (f"The computer's clock was ahead, so Job to Paid has been using {was} as today's date for its estimate "
                 f"questions. The computer now says it's {now}. If that's today's real date, go back to it?")
@@ -1692,6 +1714,14 @@ def invoice_issue(
         raise JTPError(
             "No payment methods are set, so the invoice wouldn't say how to pay.",
             hint='jtp profile set payment.methods \'[{"name":"Bank transfer","instructions":"..."}]\'',
+            code="setup_needed",
+        )
+    zone = profile["locale"].get("timezone")
+    if zone and zone_name(zone) is None:  # saved by hand: profile set refuses it
+        raise JTPError(
+            f"The saved time zone {zone!r} isn't one, so the invoice could get the computer's date instead of yours.",
+            hint="Ask the owner where the business is, then: jtp profile set locale.timezone America/Vancouver (or "
+            "their own, e.g. Europe/London)",
             code="setup_needed",
         )
     estimated = [ln for ln in inv["lines"] if ln.get("estimate")]

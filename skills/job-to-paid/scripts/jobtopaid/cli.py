@@ -416,9 +416,10 @@ def cmd_numbering(store, args):
 
 def cmd_clock(store, args):
     if args.action == "show":
-        day, latest = store.today(), store.latest_day()
-        return {"computer_date": iso(day), "latest_date": iso(latest or day),
-                "estimate_checks_date": iso(store.record_day()), "clock_behind": bool(latest and latest > day)}
+        day, latest, previous = store.today(), store.latest_day(), store.previous_day()
+        return {"computer_date": iso(day), "latest_date": iso(latest or day), "previous_date": iso(previous),
+                "estimate_checks_date": iso(store.record_day()), "clock_behind": bool(latest and latest > day),
+                "can_reset": bool(latest and latest > day and previous and day >= previous)}  # fmt: skip
     return docs.clock_reset(store, args.owner_confirmed, args.confirm)
 
 

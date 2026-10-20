@@ -121,12 +121,21 @@ def _zones() -> frozenset:
 
 def zone_name(name) -> str | None:
     """A time zone name as the tz database spells it ("america/vancouver" is "America/Vancouver"), or None when it
-    isn't one ("Mars/Olympus"), so today() would quietly use the computer's local time. A computer with no tz
-    database can't check, so the name is kept as given."""
+    isn't one ("Mars/Olympus", or "localtime", which only means the computer's own), so today() would quietly use
+    the computer's local time. A computer with no tz database can't check, so the name is kept as given."""
     text = str(name or "").strip()
-    if not text or not _zones() or text in _zones():
+    if not text:
         return text
-    return next((zone for zone in sorted(_zones()) if zone.lower() == text.lower()), None)
+    if _not_a_place(text):
+        return None
+    if not _zones() or text in _zones():
+        return text
+    return next((zone for zone in sorted(_zones()) if zone.lower() == text.lower() and not _not_a_place(zone)), None)
+
+
+def _not_a_place(zone: str) -> bool:
+    """Names some tz databases list that aren't a business's time zone."""
+    return zone.lower() in ("localtime", "posixrules", "factory") or zone.lower().startswith(("posix/", "right/"))
 
 
 def parse_date(value, base: _dt.date) -> _dt.date:

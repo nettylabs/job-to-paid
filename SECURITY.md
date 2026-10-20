@@ -22,28 +22,32 @@
   balance invoices built from an estimated quote ask too. A line that repeats an estimate the owner hasn't
   confirmed for the same customer is asked about when its invoice is issued, even without the mark:
   - an estimate still on another draft, a change order or an accepted quote, by the same description and amount;
-  - an estimate that left its invoice (changed or taken off a draft, or on a draft or change order that was
-    deleted or voided), by its description at any amount, also inside a longer description, so a re-priced, split
-    or merged copy asks. The owner's yes to such a line confirms the estimate up to that line's amount: a copy up
-    to it isn't asked about again, a bigger one is, and a yes that reaches the estimate's own figure clears it. A
-    yes on the estimate's own invoice counts too: re-priced there from $89 to $99 and confirmed, it's cleared;
-    re-priced to $1, it's confirmed up to $1. It lapses 30 days after it left.
+  - an estimate that left its invoice (changed or taken off a draft, or on a draft or change order that was deleted
+    or voided), by its description at any amount, also inside a longer description, so a re-priced, split or merged
+    copy asks. The owner's yes to such a line confirms the estimate up to that line's amount: a copy up to it isn't
+    asked about again, however many there are, and yeses on separate invoices aren't added together; a bigger one is
+    asked about, and a yes that reaches the estimate's own figure clears it. A yes on the estimate's own invoice
+    counts too: re-priced there from $89 to $99 and confirmed, it's cleared; re-priced to $1, it's confirmed up to
+    $1. It lapses 30 days after it left.
 
   A line of $0 or less never counts as a copy. Descriptions are compared without case, spacing, punctuation,
   accents, a plural s, lookalike letters or a 0 or 1 standing for a letter. The owner's yes covers only the
   estimates it was about, for 30 days: a newly marked estimate with the same figure asks again. Both 30 days are
   counted on the computer's clock, in the business's time zone (`locale.timezone`, checked against the time zone
-  database), and the date never goes backwards: the data folder keeps the latest date it was used on
-  (`clock.json`), and an earlier clock reading is ignored, so nothing can be dated in the past. Invoices and
-  quotes use the computer's date as it is. After a clock that was ahead, `jtp clock reset` goes back to the
-  computer's date, only on the owner's two-step yes. `JTP_TODAY` sets the date only in the toolkit's own tests. A
-  record past its 30 days is skipped, never deleted: only the owner's yes removes one, or `jtp customer
-  forget-estimates`, which asks them first. A code proves the question was asked, not who answered: the agent is
-  trusted to ask the owner.
+  database), and the date never goes backwards: the data folder keeps the latest date it was used on (`clock.json`),
+  and an earlier clock reading is ignored, so nothing can be dated in the past. Invoices and quotes use the
+  computer's date as it is. After a clock that was ahead, `jtp clock reset` goes back to the computer's date, only
+  on the owner's two-step yes, and never past the date the folder was last used before its latest one: with the
+  clock set back, it's refused, so nothing already recorded can be dated in the past. `JTP_TODAY` sets the date only
+  in the toolkit's own tests. A record past its 30 days is skipped, never deleted: only the owner's yes removes one,
+  or `jtp customer forget-estimates`, which asks them first. A code proves the question was asked, not who answered:
+  the agent is trusted to ask the owner.
 - **Known limit.** A copied estimate is recognised by its description and its customer. Figures copied to a
   different customer, a copy of an open estimate retyped at a different amount, or a copy under a different
-  description aren't recognised. Setting the computer's clock ahead would end the 30 days early. That would be the
-  agent deliberately working against its instructions, which a confirmation step can't prevent.
+  description aren't recognised. Setting the computer's clock ahead would end the 30 days early, and if it was
+  ahead on more than one date, `jtp clock reset` can't undo it: the estimate checks keep the later date until the
+  clock catches up. That would be the agent deliberately working against its instructions, which a confirmation
+  step can't prevent.
 
 ## Reporting a vulnerability
 
