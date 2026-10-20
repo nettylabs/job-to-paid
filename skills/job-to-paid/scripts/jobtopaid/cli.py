@@ -23,7 +23,7 @@ from .demo import seed, selftest
 from .pricing import lines_as_spec
 from .render import find_browser, render_doc, render_receipt
 from .store import Store, default_home
-from .util import JTPError, from_iso, iso, read_json, to_decimal, write_json
+from .util import JTPError, from_iso, iso, read_json, to_decimal, write_json, zone_name
 
 EPILOG_HELP = (
     "Data folder: --home, else $JTP_HOME, else /workspace/job-to-paid (if /workspace exists), else ~/job-to-paid."
@@ -320,11 +320,12 @@ def cmd_doctor(store, args):
         out["write_error"] = str(exc)
     if store.exists():
         out["setup"] = profile_mod.check(store.profile())
-        clock, latest = store.clock_day(), store.latest_day()
+        clock, latest = store.today(), store.latest_day()
         if latest and latest > clock:
             out["date_note"] = (f"The computer's date ({iso(clock)}) is earlier than the last date this folder "
-                                f"was used ({iso(latest)}), so Job to Paid keeps using {iso(latest)} until the clock "
-                                "catches up: dates never go backwards. Check the computer's date and time.")  # fmt: skip
+                                f"was used ({iso(latest)}), so the estimate checks keep {iso(latest)} until the clock "
+                                "catches up. Check the computer's date and time. If it's right, the owner can go back "
+                                "to it: jtp clock reset (asks them first).")  # fmt: skip
         out["counts"] = {
             "customers": len(store.customers()),
             "jobs": len(store.jobs()),
@@ -388,6 +389,10 @@ def cmd_profile(store, args):
             for k in ("currency_symbol", "symbol_position", "decimal_separator", "thousands_separator"):
                 data["locale"].pop(k, None)
         _set_dotted(data, args.key, value)
+        zone = zone_name(data["locale"].get("timezone"))
+        if zone:  # the tz database's spelling: "america/vancouver" is America/Vancouver
+            data["locale"]["timezone"] = zone
+            value = zone if args.key == "locale.timezone" else value
         followed, warnings = profile_mod.follow_contact(data, args.key, existing, value)
         errors = profile_mod.validate(data)
         if errors:
@@ -407,6 +412,14 @@ def cmd_profile(store, args):
 def cmd_numbering(store, args):
     store.set_counter(args.kind, args.next)
     return {"next": store.next_id(args.kind, peek=True)}
+
+
+def cmd_clock(store, args):
+    if args.action == "show":
+        day, latest = store.today(), store.latest_day()
+        return {"computer_date": iso(day), "latest_date": iso(latest or day),
+                "estimate_checks_date": iso(store.record_day()), "clock_behind": bool(latest and latest > day)}
+    return docs.clock_reset(store, args.owner_confirmed, args.confirm)
 
 
 def _customer_fields(args) -> dict:
@@ -1227,6 +1240,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("kind", choices=["quote", "invoice", "change_order", "credit_note", "job", "customer", "payment"])
     p.add_argument("next", type=int)
+
+    p = _add(
+        sub,
+        "clock",
+        "Show the dates in use, or go back to the computer's date after its clock was ahead.",
+        ["jtp clock show", "jtp clock reset   (asks the owner first: returns the question and its code)"],
+        cmd_clock,
+    )
+    p.add_argument("action", choices=["show", "reset"])
+    p.add_argument("--owner-confirmed", metavar="WORDS", help="reset: the owner's own words; only a plain yes counts")
+    p.add_argument("--confirm", metavar="CODE", help="reset: the code that came with the owner's question")
 
     p = _add(
         sub,

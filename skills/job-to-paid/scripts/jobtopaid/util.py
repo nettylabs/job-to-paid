@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as _dt
+import functools
 import json
 import os
 import re
@@ -106,6 +107,26 @@ def today(tz_name: str | None = None) -> _dt.date:
         except Exception:  # unknown zone or no tz database: fall back to local time
             pass
     return _dt.date.today()
+
+
+@functools.lru_cache(maxsize=1)
+def _zones() -> frozenset:
+    try:
+        from zoneinfo import available_timezones
+
+        return frozenset(available_timezones())
+    except Exception:  # no tz database on this computer
+        return frozenset()
+
+
+def zone_name(name) -> str | None:
+    """A time zone name as the tz database spells it ("america/vancouver" is "America/Vancouver"), or None when it
+    isn't one ("Mars/Olympus"), so today() would quietly use the computer's local time. A computer with no tz
+    database can't check, so the name is kept as given."""
+    text = str(name or "").strip()
+    if not text or not _zones() or text in _zones():
+        return text
+    return next((zone for zone in sorted(_zones()) if zone.lower() == text.lower()), None)
 
 
 def parse_date(value, base: _dt.date) -> _dt.date:

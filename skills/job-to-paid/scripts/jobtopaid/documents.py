@@ -1083,7 +1083,7 @@ def invoice_update(store, ident: str, spec: dict) -> dict:
         for item in before:
             kept_off = {(t["key"].replace(" ", ""), t["amount"]) for t in taken_off}
             if (item["key"].replace(" ", ""), item["amount"]) not in now | kept_off:
-                taken_off.append(dict(item, date=iso(store.today())))
+                taken_off.append(dict(item, date=iso(store.record_day())))
         taken_off = [t for t in taken_off if (t["key"].replace(" ", ""), t["amount"]) not in now]
         if taken_off:
             inv["removed_estimates"] = taken_off
@@ -1212,15 +1212,16 @@ REMEMBER_DAYS = 30  # how long an estimate that left its invoice (taken off, del
 
 
 def _recent(store, item: dict) -> bool:
-    """An estimate that left its invoice is checked against for REMEMBER_DAYS from when it left, by store.today(),
-    which never goes backwards. After that it's skipped but kept: only the owner's yes deletes it."""
-    return str(item.get("date") or "") >= iso(store.today() - _dt.timedelta(days=REMEMBER_DAYS))
+    """An estimate that left its invoice is checked against for REMEMBER_DAYS from when it left, by
+    store.record_day(), which never goes backwards. After that it's skipped but kept: only the owner's yes deletes
+    it."""
+    return str(item.get("date") or "") >= iso(store.record_day() - _dt.timedelta(days=REMEMBER_DAYS))
 
 
 def _taken_off(store, inv: dict) -> list:
     """The estimates changed or taken off a draft (invoice_update), each with the day it happened. Records from
     before that was kept get the draft's own day."""
-    since = (inv.get("created_at") or "")[:10] or iso(store.today())
+    since = (inv.get("created_at") or "")[:10] or iso(store.record_day())
     return [dict(t, date=t.get("date") or since) for t in inv.get("removed_estimates") or []]
 
 
@@ -1307,7 +1308,7 @@ def _confirmations(store, customer_id) -> list:
     """The owner's yeses to lines that matched an estimate elsewhere, as {"source", "key", "amount", "date"}: the
     amount is what the matching lines on that invoice added up to. Each covers only the estimate it was about (its
     source and description), and only for CONFIRMED_DAYS."""
-    since = iso(store.today() - _dt.timedelta(days=CONFIRMED_DAYS))
+    since = iso(store.record_day() - _dt.timedelta(days=CONFIRMED_DAYS))
     return [c for c in _customer_field(store, customer_id, "confirmed_figures")
             if c.get("source") and str(c.get("date") or "") >= since]  # fmt: skip
 
@@ -1355,7 +1356,7 @@ def _remember_estimates(store, doc: dict, removed: str) -> list:
     else:
         marked = _estimate_items(store, [ln for ln in doc["lines"] if ln.get("estimate")])
         found = [(marked, f"change_order:{doc['id']}", "", True)]
-    confirmations, today = _confirmations(store, doc["customer_id"]), iso(store.today())
+    confirmations, today = _confirmations(store, doc["customer_id"]), iso(store.record_day())
     left = []
     for items, source, _, _ in found:
         for item in items:
@@ -1506,7 +1507,7 @@ def _note_confirmed(store, customer_id, matches: list) -> None:
     for ln, hits in matches:
         for s in hits:
             totals[s["source"], s["key"]] = totals.get((s["source"], s["key"]), ZERO) + to_decimal(_amount(ln))
-    today = iso(store.today())
+    today = iso(store.record_day())
     added = [{"source": source, "key": key, "amount": format(total.normalize(), "f"), "date": today}
              for (source, key), total in totals.items()]  # fmt: skip
     if added:
@@ -1567,11 +1568,68 @@ def forget_estimates(store, customer_id: str, owner_confirmed=None, confirm_code
     return {"customer": cust["id"], "forgotten": listed, "owner_said": said}
 
 
+# What may follow the owner's plain yes to "... go back to it?" ("yes, go back"). Not a yes on their own.
+RESET_WORDS = ("go back", "go back to it", "reset it", "reset", "use it")
+
+
+def clock_reset(store, owner_confirmed=None, confirm_code=None) -> dict:
+    """Go back to the computer's date after its clock was ahead, on the owner's plain yes. The estimate checks' date
+    never goes backwards (Store.record_day), so this is the only way back; the owner is asked to make sure the
+    computer's date is really today, because going back with a clock set back would date removals in the past."""
+    day, latest = store.today(), store.latest_day()
+    if not latest or latest <= day:
+        return {"computer_date": iso(day), "latest_date": iso(latest or day),
+                "note": f"Nothing to reset: the computer's date ({iso(day)}) isn't behind the latest date used."}  # fmt: skip
+    was, now = _shown_date(store, iso(latest)), _shown_date(store, iso(day))
+    question = (f"The computer's clock was ahead, so Job to Paid has been using {was} as today's date for its estimate "
+                f"questions. The computer now says it's {now}. If that's today's real date, go back to it?")
+    said = confirm.owner_yes(
+        store.home, f"clock.reset|{iso(latest)}|{iso(day)}", question, owner_confirmed, confirm_code,
+        why="Going back to an earlier date changes how long removed estimates are checked for, so only the owner can "
+        "approve it, after checking the date: ask, and wait for their answer.",
+        echo=RESET_WORDS,
+    )
+    moved = _bring_back_record_dates(store, iso(day))
+    store.set_latest_day(day)
+    store.log("clock.reset", None, owner_said=said, was=iso(latest), now=iso(day), records=moved)
+    confirm.use(store.home, confirm_code)  # the owner's yes counts once
+    return {"computer_date": iso(day), "was": iso(latest), "records_moved": moved, "owner_said": said}
+
+
+def _bring_back_record_dates(store, day: str) -> int:
+    """Estimate records dated after `day`, made while the clock was ahead, are dated `day`: they're checked for 30
+    days from today rather than from the wrong date. Returns how many dates moved."""
+    moved = 0
+
+    def back(item: dict) -> None:
+        nonlocal moved
+        if str(item.get("date") or "") > day:
+            item["date"], moved = day, moved + 1
+
+    customers = store.customers()
+    for cust in customers:
+        for entry in cust.get("unconfirmed_estimates") or []:
+            back(entry)
+            for line in entry.get("lines") or []:
+                back(line)
+        for yes in cust.get("confirmed_figures") or []:
+            back(yes)
+    if moved:
+        store.save_customers(customers)
+    for inv in store.docs("invoice"):
+        before = moved
+        for item in inv.get("removed_estimates") or []:
+            back(item)
+        if moved != before:
+            store.save_doc(inv)
+    return moved
+
+
 def _remember_changed(store, inv: dict, taken_off: list) -> None:
     """The owner confirmed an invoice that had estimates changed or taken off it. An estimate re-priced on it is
     confirmed up to what its lines now add up to ($89 re-priced to $99 is cleared; to $1, only up to $1), and a yes
     to a copy elsewhere counts too. What isn't cleared is kept on the customer, so a copy over that still asks."""
-    confirmations, today = _confirmations(store, inv["customer_id"]), iso(store.today())
+    confirmations, today = _confirmations(store, inv["customer_id"]), iso(store.record_day())
     left = []
     for t in _taken_off(store, dict(inv, removed_estimates=taken_off)):
         here = sum((to_decimal(_amount(ln)) for ln in priced(inv["lines"]) if _same_line(t["key"], _line_key(ln))),

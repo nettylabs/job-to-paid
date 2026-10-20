@@ -43,7 +43,8 @@ like 15 Oct 2026. Look right?")
 - Date style (`locale.date_format`): `D MMM YYYY` (default, unambiguous), `DD/MM/YYYY`, `MM/DD/YYYY`,
   `YYYY-MM-DD`, `DD.MM.YYYY`, `DD-MM-YYYY`.
 - Paper size (`locale.paper_size`): `letter` (US, Canada, Mexico, Philippines) or `a4` (most others).
-- Time zone (`locale.timezone`, e.g. `America/Vancouver`, `Europe/London`) so "today" and due dates are right.
+- Time zone (`locale.timezone`, a time zone database name such as `America/Vancouver` or `Europe/London`;
+  other names are refused) so "today" and due dates are right.
 - Language for documents (`locale.language`). If it isn't English, run `jtp profile labels`, translate
   **every** value (keep `{name}`, `{date}` and `{number}` exactly as they are), and save them with
   `jtp profile set labels '<json>'`. Also translate line

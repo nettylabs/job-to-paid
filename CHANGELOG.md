@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.5 (2026-10-19)
+
+Follow-ups from independent rechecks of 1.0.4.
+
+- **Invoices and quotes use the computer's date.** Only the estimate checks keep a date that never goes backwards.
+  Before, a computer clock that was ahead even once, or a time zone switched and back late in the day, dated every
+  later quote, invoice and due date ahead until the real date caught up.
+- **`jtp clock reset`** goes back to the computer's date after its clock was ahead, on the owner's two-step yes. The
+  question asks them to make sure that date is really today. Estimate records dated after it are brought back to
+  it, so they're checked for 30 days from today. `jtp clock show` shows the dates, and `jtp doctor` points to the
+  reset when the computer's date is behind.
+- **Time zone names are checked.** `jtp profile set locale.timezone` refuses a name that isn't in the time zone
+  database ("Mars/Olympus") and spells one the database's way ("europe/london" is Europe/London). `profile check`
+  and `doctor` report an unknown one saved earlier. Before, it was accepted, and "today" quietly used the
+  computer's local time.
+- 111 automated tests on Python 3.9, 3.11 and 3.13, and a 50-check self-test.
+
 ## 1.0.4 (2026-10-19)
 
 Fixes from independent checks of 1.0.3 and of an early build of 1.0.4.

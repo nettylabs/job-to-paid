@@ -32,9 +32,11 @@
   A line of $0 or less never counts as a copy. Descriptions are compared without case, spacing, punctuation,
   accents, a plural s, lookalike letters or a 0 or 1 standing for a letter. The owner's yes covers only the
   estimates it was about, for 30 days: a newly marked estimate with the same figure asks again. Both 30 days are
-  counted on the computer's clock, in the business's time zone (`locale.timezone`), and the date never goes
-  backwards: the data folder keeps the latest date it was used on (`clock.json`), and an earlier clock reading is
-  ignored, so nothing can be dated in the past. `JTP_TODAY` sets the date only in the toolkit's own tests. A
+  counted on the computer's clock, in the business's time zone (`locale.timezone`, checked against the time zone
+  database), and the date never goes backwards: the data folder keeps the latest date it was used on
+  (`clock.json`), and an earlier clock reading is ignored, so nothing can be dated in the past. Invoices and
+  quotes use the computer's date as it is. After a clock that was ahead, `jtp clock reset` goes back to the
+  computer's date, only on the owner's two-step yes. `JTP_TODAY` sets the date only in the toolkit's own tests. A
   record past its 30 days is skipped, never deleted: only the owner's yes removes one, or `jtp customer
   forget-estimates`, which asks them first. A code proves the question was asked, not who answered: the agent is
   trusted to ask the owner.

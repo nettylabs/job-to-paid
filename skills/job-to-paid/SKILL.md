@@ -13,7 +13,7 @@ description: >-
 license: MIT
 compatibility: Needs Python 3.9+ on the agent's computer. Standard library only, local files only, no network calls.
 metadata:
-  version: "1.0.4"
+  version: "1.0.5"
 ---
 
 # Job to Paid
@@ -71,10 +71,10 @@ python3 <this-skill-folder>/scripts/jtp.py <command> [options]
   `--owner-confirmed` and the code in `--confirm`. Only a plain yes as the whole answer counts ("yes",
   "yes, they're final"): "ok", "sure", an emoji, a question, a joke or a yes with a condition is refused,
   so ask again. Each code works once. Issuing an invoice with estimated figures, voiding an invoice and
-  making a credit note all ask this way, and so does `jtp customer forget-estimates`. If the owner says
-  no, tell them it wasn't done. `jtp co void` and `jtp payment undo` don't ask by themselves, because
-  both can be put right again (a new change order, the payment recorded again), so get the owner's OK
-  before either.
+  making a credit note all ask this way, and so do `jtp customer forget-estimates` and `jtp clock reset`.
+  If the owner says no, tell them it wasn't done. `jtp co void` and `jtp payment undo` don't ask by
+  themselves, because both can be put right again (a new change order, the payment recorded again), so
+  get the owner's OK before either.
 - `jtp <command> --help` shows options and real examples. Start with `jtp --help`.
 - Records live in one data folder: `$JTP_HOME`, else `/workspace/job-to-paid` when `/workspace`
   exists, else `~/job-to-paid`. Keep it on a disk that persists. Remember the path you used.

@@ -78,14 +78,15 @@ class Store:
         write_json(self.profile_path, data)
         self._profile = profile_mod.merged(data)
 
-    def clock_day(self):
-        """The computer's date in the business's time zone (locale.timezone)."""
+    def today(self):
+        """The business's date: the computer's, in its time zone (locale.timezone). Documents are dated by it."""
         return today(self.profile()["locale"].get("timezone") if self.exists() else None)
 
-    def today(self):
-        """The business's date: the computer's, but never earlier than the latest date anything was saved here. So
-        setting the clock back can't date an estimate taken off an invoice in the past, where it would lapse early."""
-        day, latest = self.clock_day(), self.latest_day()
+    def record_day(self):
+        """The date the estimate checks stamp and count their 30 days from: today, but never earlier than the latest
+        date anything was saved here. So setting the clock back can't date an estimate taken off an invoice in the
+        past, where it would lapse early. After a clock that was ahead, `jtp clock reset` brings it back."""
+        day, latest = self.today(), self.latest_day()
         return latest if latest and latest > day else day
 
     def latest_day(self):
@@ -98,10 +99,14 @@ class Store:
         return self._latest
 
     def _note_day(self) -> None:
-        day = self.today()
-        if day != self.latest_day():
-            write_json(self.home / CLOCK_FILE, {"latest": iso(day)})
-            self._latest = day
+        day, latest = self.today(), self.latest_day()
+        if not latest or day > latest:
+            self.set_latest_day(day)
+
+    def set_latest_day(self, day) -> None:
+        """Only for _note_day, and for `jtp clock reset` on the owner's yes."""
+        write_json(self.home / CLOCK_FILE, {"latest": iso(day)})
+        self._latest = day
 
     def money(self) -> dict:
         return currency_display(self.profile()["locale"])

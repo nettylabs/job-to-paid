@@ -14,6 +14,7 @@ from . import documents as docs
 from . import followups, records, reports, util
 from .money import compute_totals, currency_display, format_total
 from .profile import follow_contact, new_profile
+from .profile import validate as validate_profile
 from .render import render_doc, render_receipt
 from .store import Store
 from .util import JTPError, iso, write_json
@@ -701,6 +702,21 @@ def selftest() -> dict:
             dated = reopened.customer(eighth)["unconfirmed_estimates"][-1]["date"]
             check("the date never goes backwards: a removed estimate is dated by the latest date already used",
                   dated == iso(ahead), dated)  # fmt: skip
+
+            # 1.0.5: documents use the computer's date; only the owner can go back to it; time zone names are checked.
+            billed = docs.invoice_create(reopened, customer_id=eighth, spec={"lines": service})["invoice"]["id"]
+            billed = docs.invoice_issue(reopened, billed)["invoice"]
+            check("invoices use the computer's date, even after its clock was ahead",
+                  billed["date"] == iso(reopened.today()) and reopened.record_day() == ahead, billed["date"])  # fmt: skip
+            asked = _refusal(docs.clock_reset, reopened)
+            _with_owners_yes(docs.clock_reset, reopened)
+            check("going back to the computer's date waits for the owner's yes",
+                  asked == "needs_owner" and reopened.record_day() == reopened.today(), asked)  # fmt: skip
+            mars = new_profile("USD")
+            mars["locale"]["timezone"] = "Mars/Olympus"
+            refused = any("isn't a time zone name" in error for error in validate_profile(mars))
+            check("an unknown time zone name is refused (on a computer with a time zone database)",
+                  refused or util.zone_name("Mars/Olympus") == "Mars/Olympus", refused)  # fmt: skip
             write_json(Path(tmp) / "ok.json", {"ok": True})
         finally:
             if old_today:

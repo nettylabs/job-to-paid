@@ -1007,7 +1007,7 @@ class WorkflowTests(StoreCase):
         a = self._draft_for(customer, dict(call_out, estimate=True), repair)
         b = self._draft_for(customer, dict(call_out, description="Travel", estimate=True))
         os.environ["JTP_TODAY"] = "2026-09-01"  # the computer's clock set back
-        self.assertEqual((str(self.store.clock_day()), str(self.store.today())), ("2026-09-01", "2026-10-15"))
+        self.assertEqual((str(self.store.today()), str(self.store.record_day())), ("2026-09-01", "2026-10-15"))
         docs.invoice_delete(self.store, b)
         docs.invoice_update(self.store, a, {"lines": [repair]})
         self.assertEqual(self.store.customer(customer)["unconfirmed_estimates"][0]["date"], "2026-10-15")
@@ -1015,6 +1015,53 @@ class WorkflowTests(StoreCase):
         os.environ["JTP_TODAY"] = "2026-10-16"
         for line in (dict(call_out, unit_price="95"), dict(call_out, description="Travel", unit_price="40")):
             self._asked(self._draft_for(customer, line))
+
+    def test_documents_use_the_computers_date_after_a_clock_that_was_ahead(self):
+        """The 1.0.4 rechecks: once the saved date was ahead (a clock briefly wrong, or a time zone switched and
+        back), every later quote, invoice and due date was dated ahead. Only the estimate checks keep it now."""
+        customer = self._customer("Clock Ahead")
+        os.environ["JTP_TODAY"] = "2027-03-01"  # the computer's clock briefly ahead
+        self._customer("Clock Ahead Too")  # anything saved then keeps that date
+        os.environ["JTP_TODAY"] = "2026-10-15"  # put right
+        drain = {"kind": "fee", "description": "Drain clean", "unit_price": "10"}
+        issued = docs.invoice_issue(self.store, self._draft_for(customer, drain))["invoice"]
+        self.assertEqual((issued["date"], issued["due_date"]), ("2026-10-15", "2026-10-29"))
+        quote = docs.quote_create(self.store, {"title": "Drains", "lines": [drain]}, customer_id=customer)["quote"]
+        self.assertEqual(quote["date"], "2026-10-15")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89", "estimate": True}
+        docs.invoice_delete(self.store, self._draft_for(customer, call_out))
+        self.assertEqual(self.store.customer(customer)["unconfirmed_estimates"][0]["date"], "2027-03-01")
+
+    def test_the_owner_can_go_back_to_the_computers_date(self):
+        """The 1.0.4 rechecks: once the saved date was ahead, only editing clock.json brought it back. Now the owner
+        can, with the same two-step yes, and estimate records made meanwhile are dated today."""
+        customer = self._customer("Reset Customer")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        self.assertIn("Nothing to reset", docs.clock_reset(self.store)["note"])
+        os.environ["JTP_TODAY"] = "2028-10-15"  # the computer's clock two years ahead, for one run
+        docs.invoice_delete(self.store, self._draft_for(customer, dict(call_out, estimate=True)))
+        os.environ["JTP_TODAY"] = "2026-10-16"  # put right
+        with self.assertRaises(JTPError) as caught:
+            docs.clock_reset(self.store)
+        asked = caught.exception
+        self.assertEqual((asked.code, asked.ask_owner), ("needs_owner", (
+            "The computer's clock was ahead, so Job to Paid has been using 15 Oct 2028 as today's date for its "
+            "estimate questions. The computer now says it's 16 Oct 2026. If that's today's real date, go back to it?")))
+        for reply in ("ok", "sure", "yes, next week", "yes jk", "no", "go back"):
+            with self.subTest(reply=reply), self.assertRaises(JTPError):
+                docs.clock_reset(self.store, owner_confirmed=reply, confirm_code=asked.confirm)
+        self.assertEqual(str(self.store.record_day()), "2028-10-15")  # nothing changed
+        os.environ["JTP_TODAY"] = "2026-10-17"  # the computer's date moved since the question: asked afresh
+        with self.assertRaises(JTPError) as caught:
+            docs.clock_reset(self.store, owner_confirmed="yes", confirm_code=asked.confirm)
+        self.assertEqual(caught.exception.code, "needs_owner")
+        out = docs.clock_reset(self.store, owner_confirmed="Yes, go back.", confirm_code=caught.exception.confirm)
+        self.assertEqual((out["was"], out["computer_date"], out["records_moved"]), ("2028-10-15", "2026-10-17", 2))
+        self.assertEqual(str(self.store.record_day()), "2026-10-17")
+        self.assertEqual(self.store.customer(customer)["unconfirmed_estimates"][0]["date"], "2026-10-17")
+        self._asked(self._draft_for(customer, dict(call_out, unit_price="95")))  # still checked, from today
+        os.environ["JTP_TODAY"] = "2026-11-18"  # 32 days on: lapsed, counted from today rather than from 2028
+        self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="95")), "issued")
 
     def test_the_date_never_deletes_a_removed_estimate(self):
         """An independent check of 1.0.4: issuing an unrelated invoice with the date set ahead deleted the customer's
@@ -1636,6 +1683,7 @@ class DocsTests(unittest.TestCase):
         self.assertIn("never edit the data files by hand", skill)
         self.assertIn("`jtp co void`", skill)
         self.assertIn("`jtp payment undo`", skill)
+        self.assertIn("so do `jtp customer forget-estimates` and `jtp clock reset`", " ".join(skill.split()))
 
     def test_security_states_the_known_limit_and_fits_the_wrap_width(self):
         """An independent review of 1.0.1: the estimate check is per customer, which SECURITY.md didn't say, and one
@@ -1665,6 +1713,8 @@ class DocsTests(unittest.TestCase):
         self.assertIn("counted on the computer's clock, in the business's time zone", security)
         self.assertIn("the date never goes backwards", security)
         self.assertIn("`JTP_TODAY` sets the date only in the toolkit's own tests", security)
+        self.assertIn("Invoices and quotes use the computer's date as it is.", security)  # the 1.0.4 rechecks
+        self.assertIn("`jtp clock reset` goes back to the computer's date, only on the owner's two-step yes", security)
 
     def test_the_skill_says_to_keep_the_estimate_mark_when_changing_a_quantity(self):
         """An independent review of 1.0.2: the likeliest honest slip is dropping the mark while changing a quantity."""
@@ -1712,13 +1762,55 @@ class CliTests(unittest.TestCase):
             code, out = self.run_cli(home, "invoice", "issue", copy)
             self.assertEqual((code, out["code"]), (1, "estimates_unconfirmed"))  # the memory is still there
 
+    def test_the_clock_reset_takes_the_owners_two_step_yes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo")
+            code, out = self.run_cli(home, "clock", "show")
+            self.assertEqual((code, out["clock_behind"]), (0, False))
+            (home / "clock.json").write_text('{"latest": "2099-01-01"}', encoding="utf-8")
+            code, out = self.run_cli(home, "clock", "show")
+            self.assertEqual((out["clock_behind"], out["estimate_checks_date"]), (True, "2099-01-01"))
+            code, out = self.run_cli(home, "clock", "reset", "--dry-run")
+            self.assertEqual((code, out["code"]), (1, "usage"))
+            self.assertIn("--dry-run doesn't work with clock reset", out["error"])
+            code, out = self.run_cli(home, "clock", "reset")
+            self.assertEqual((code, out["code"]), (1, "needs_owner"))
+            self.assertIn("If that's today's real date, go back to it?", out["ask_owner"])
+            question = out["confirm"]
+            code, out = self.run_cli(home, "clock", "reset", "--owner-confirmed", "ok", "--confirm", question)
+            self.assertEqual((code, out["code"]), (1, "unclear_answer"))
+            code, out = self.run_cli(home, "clock", "reset", "--owner-confirmed", "yes", "--confirm", question)
+            self.assertEqual((code, out["was"]), (0, "2099-01-01"))
+            self.assertFalse(self.run_cli(home, "clock", "show")[1]["clock_behind"])
+
+    def test_time_zone_names_are_checked(self):
+        """The 1.0.4 rechecks: an unknown time zone ("Mars/Olympus") was saved with no warning, and "today" quietly
+        used the computer's local time."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo", "--currency", "CAD")
+            code, out = self.run_cli(home, "profile", "set", "locale.timezone", "Mars/Olympus")
+            self.assertEqual(code, 1)
+            self.assertIn("locale.timezone 'Mars/Olympus' isn't a time zone name", out["error"])
+            self.assertEqual(Store(home).profile()["locale"]["timezone"], "America/Vancouver")  # not saved
+            code, out = self.run_cli(home, "profile", "set", "locale.timezone", "europe/london")
+            self.assertEqual((code, out["value"]), (0, "Europe/London"))  # spelled the tz database's way
+            self.assertEqual(Store(home).profile()["locale"]["timezone"], "Europe/London")
+            profile = json.loads((home / "profile.json").read_text(encoding="utf-8"))
+            profile["locale"]["timezone"] = "Mars/Olympus"  # saved before this check existed
+            (home / "profile.json").write_text(json.dumps(profile), encoding="utf-8")
+            code, out = self.run_cli(home, "doctor")
+            self.assertIn("isn't a time zone name", " ".join(out["setup"]["errors"]))
+
     def test_doctor_says_when_the_computers_clock_is_behind(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "data"
             self.run_cli(home, "demo")
             (home / "clock.json").write_text('{"latest": "2099-01-01"}', encoding="utf-8")
             code, out = self.run_cli(home, "doctor")
-            self.assertIn("keeps using 2099-01-01 until the clock catches up", out["date_note"])
+            self.assertIn("the estimate checks keep 2099-01-01 until the clock catches up", out["date_note"])
+            self.assertIn("jtp clock reset (asks them first)", out["date_note"])
 
     def test_cli_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:

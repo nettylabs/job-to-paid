@@ -10,7 +10,7 @@ import copy
 import re
 
 from .money import CURRENCY_DEFAULTS, PRICED_KINDS
-from .util import JTPError, to_decimal
+from .util import JTPError, to_decimal, zone_name
 
 DEFAULT_LABELS = {
     "quote": "Quote",
@@ -249,6 +249,10 @@ def validate(profile: dict) -> list:
         errors.append("locale.paper_size must be letter or a4.")
     if profile["locale"].get("show_currency_code", "auto") not in ("auto", "always", "never"):
         errors.append("locale.show_currency_code must be auto, always or never.")
+    zone = profile["locale"].get("timezone")
+    if zone and zone_name(zone) is None:
+        errors.append(f"locale.timezone {zone!r} isn't a time zone name, so 'today' would quietly use the computer's "
+                      "clock. Use one like America/Vancouver, Europe/London or Australia/Sydney.")  # fmt: skip
     return errors
 
 

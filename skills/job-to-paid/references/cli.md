@@ -19,6 +19,7 @@ positional arguments:
     selftest   Run built-in checks (money math, a full job, PDFs) in a temporary folder.
     profile    Show, check or change business settings.
     numbering  Set the next number (e.g. to continue from your old invoice numbers).
+    clock      Show the dates in use, or go back to the computer's date after its clock was ahead.
     customer   Add, find, show or update customers.
     pricebook  Your saved items and prices (learned from your quotes).
     job        Jobs and the work log (time, materials, expenses, notes, photos).
@@ -164,6 +165,27 @@ options:
 Examples:
   jtp numbering invoice 1047
   jtp numbering quote 300
+```
+
+## clock
+
+```text
+usage: jtp clock [-h] [--owner-confirmed WORDS] [--confirm CODE] {show,reset}
+
+Show the dates in use, or go back to the computer's date after its clock was ahead.
+
+positional arguments:
+  {show,reset}
+
+options:
+  -h, --help            show this help message and exit
+  --owner-confirmed WORDS
+                        reset: the owner's own words; only a plain yes counts
+  --confirm CODE        reset: the code that came with the owner's question
+
+Examples:
+  jtp clock show
+  jtp clock reset   (asks the owner first: returns the question and its code)
 ```
 
 ## customer
