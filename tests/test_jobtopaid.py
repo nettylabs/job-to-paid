@@ -32,8 +32,11 @@ from jobtopaid.profile import follow_contact  # noqa: E402
 from jobtopaid.render import render_doc, render_receipt  # noqa: E402
 from jobtopaid.view import build_view  # noqa: E402
 from jobtopaid.store import Store  # noqa: E402
+from jobtopaid import util  # noqa: E402
 from jobtopaid.util import JTPError, to_decimal  # noqa: E402
 from jobtopaid.documents import priced  # noqa: E402
+
+util.TEST_DATES = True  # JTP_TODAY sets the date in these tests, and only here (commands run by CliTests ignore it)
 
 EVERY = ["labour", "material", "equipment", "subcontract", "fee", "other"]
 # Replies an independent review of 1.0.0 saw count as the owner's yes (any two characters did), and more.
@@ -772,12 +775,12 @@ class WorkflowTests(StoreCase):
             line.pop("estimate", None)
         again = docs.invoice_create(self.store, customer_id=self.cust["id"], spec={"title": "C", "lines": copy_lines})
         self.assertEqual(again["invoice"]["id"], draft["id"])  # the same number, released by the delete
-        self.assertIn("Call-out: matches an estimate for Jane Doe that the owner hasn't confirmed (on a deleted draft)",
-                      " ".join(again["warnings"]))  # fmt: skip
+        self.assertIn("Call-out: matches an estimate for Jane Doe that the owner hasn't confirmed (Call-out: 1 ea at "
+                      "$89.00 = $89.00 CAD, on a deleted draft)", " ".join(again["warnings"]))  # fmt: skip
         question = self._asked(again["invoice"]["id"]).ask_owner
         self.assertEqual(question, f"Before I finalize invoice {draft['id']}: these lines match estimates for Jane Doe "
-                         "that you haven't confirmed (on a deleted draft). Are these figures final? Call-out: 1 ea at "
-                         "$89.00 = $89.00 CAD")  # only the remembered line is named, not Work  # fmt: skip
+                         "that you haven't confirmed (Call-out: 1 ea at $89.00 = $89.00 CAD, on a deleted draft). Are "
+                         "these figures final? Call-out: 1 ea at $89.00 = $89.00 CAD")  # not Work  # fmt: skip
         self._issue_with_the_owners_yes(again["invoice"]["id"])
         self.assertNotIn("unconfirmed_estimates", self.store.customer(self.cust["id"]))  # confirmed: forgotten
         draft = docs.invoice_create(self.store, customer_id=self.cust["id"], spec={"title": "Call-out", "lines": [
@@ -785,7 +788,8 @@ class WorkflowTests(StoreCase):
         voided = owner_approves(docs.invoice_void, self.store, draft["id"], "Wrong job")
         self.assertIn("never confirmed", voided["warnings"][0])
         copy = self._stripped_copy(draft)["invoice"]["id"]
-        self.assertIn(f"(on voided draft {draft['id']})", self._asked(copy).ask_owner)
+        self.assertIn(f"(Call-out: 1 ea at $95.00 = $95.00 CAD, on voided draft {draft['id']})",
+                      self._asked(copy).ask_owner)  # fmt: skip
 
     def _customer(self, name):
         email = name.lower().replace(" ", ".") + "@x.example"
@@ -809,8 +813,8 @@ class WorkflowTests(StoreCase):
                 self.assertEqual(docs.invoice_update(self.store, a, {"lines": kept})["warnings"], [])
                 b = docs.invoice_create(self.store, customer_id=customer, spec={"lines": [call_out]})
                 self.assertIn(f"Call-out: matches an estimate for Moved {route} that the owner hasn't confirmed "
-                              f"(taken off draft {a})", " ".join(b["warnings"]))  # fmt: skip
-                self.assertIn(f"(taken off draft {a})", self._asked(b["invoice"]["id"]).ask_owner)
+                              f"(Call-out: 1 ea at $89.00 = $89.00 CAD, taken off draft {a})", " ".join(b["warnings"]))
+                self.assertIn(f"$89.00 CAD, taken off draft {a})", self._asked(b["invoice"]["id"]).ask_owner)
                 self.assertTrue(self._asked(a).ask_owner.startswith(
                     f"Before I finalize invoice {a}: Call-out: 1 ea at $89.00 = $89.00 CAD was an estimate, since "
                     "changed or taken off it. Are these figures final? Repair: 2 hr"))  # the right line, named
@@ -819,7 +823,7 @@ class WorkflowTests(StoreCase):
                 owner_approves(docs.invoice_void, self.store, a, "Wrong job")
                 remembered = self.store.customer(customer)["unconfirmed_estimates"][0]["lines"]
                 self.assertEqual([(i["key"], i["amount"]) for i in remembered], [("call out", "89")])
-                self.assertIn(f"(on voided draft {a})", self._asked(b["invoice"]["id"]).ask_owner)
+                self.assertIn(f"$89.00 CAD, on voided draft {a})", self._asked(b["invoice"]["id"]).ask_owner)
 
     def test_an_estimate_taken_off_an_issued_invoice_still_counts(self):
         """Taking an estimate off a draft and issuing it leaves the estimate unconfirmed, so the same figure on
@@ -834,7 +838,8 @@ class WorkflowTests(StoreCase):
         self.assertEqual(docs.invoice_issue(self.store, self._draft_for(customer, labour))["invoice"]["status"],
                          "issued")  # Labour was never an estimate: not asked  # fmt: skip
         copy = self._draft_for(customer, call_out)
-        self.assertIn(f"(taken off invoice {a} before it was issued)", self._asked(copy).ask_owner)
+        self.assertIn(f"(Call-out: 1 ea at $89.00 = $89.00 CAD, changed or taken off invoice {a} before it was issued)",
+                      self._asked(copy).ask_owner)  # fmt: skip
 
     def test_an_open_estimate_only_matches_its_own_figure_and_a_yes_sticks(self):
         """An independent review of 1.0.2: while an estimated "Labour 4 hr" draft was open, every "Labour 1 hr"
@@ -860,10 +865,10 @@ class WorkflowTests(StoreCase):
         retyped = [{"kind": "material", "description": "Heater", "qty": 1, "unit_price": "1125"},
                    {"kind": "labour", "description": "Install", "qty": 3}]  # fmt: skip
         on_job = docs.invoice_create(self.store, job_id=job_id, spec={"lines": retyped})
-        self.assertIn(f"(on quote {quote['id']})", " ".join(on_job["warnings"]))
+        self.assertIn(f"$1,125.00 CAD, on quote {quote['id']})", " ".join(on_job["warnings"]))
         question = self._asked(on_job["invoice"]["id"]).ask_owner
-        self.assertIn(f"these lines match estimates for Jane Doe that you haven't confirmed (on quote {quote['id']})",
-                      question)  # fmt: skip
+        self.assertIn("these lines match estimates for Jane Doe that you haven't confirmed (Heater: 1 ea at "
+                      f"$1,125.00 = $1,125.00 CAD, on quote {quote['id']})", question)  # fmt: skip
         self.assertIn("Heater: 1 ea at $1,125.00", question)
         self.assertNotIn("Install", question)  # not an estimate on the quote
         for_customer = self._draft_for(self.cust["id"], *retyped)
@@ -885,7 +890,7 @@ class WorkflowTests(StoreCase):
         merged = {"kind": "fee", "description": "Repair and call-out", "unit_price": "279"}
         self._asked(self._draft_for(customer, merged))
         self._issue_with_the_owners_yes(self._draft_for(customer, dict(call_out, unit_price="50")))
-        part = {"kind": "fee", "description": "Call-out part 2", "unit_price": "39"}  # one yes covered the estimate
+        part = {"kind": "fee", "description": "Call-out part 2", "unit_price": "39"}  # within the $50 said yes to
         self.assertEqual(docs.invoice_issue(self.store, self._draft_for(customer, part))["invoice"]["status"], "issued")
         other = self._customer("Deleted Any Amount")
         draft = self._draft_for(other, dict(call_out, estimate=True))
@@ -899,17 +904,17 @@ class WorkflowTests(StoreCase):
     def _issued_plain(self, customer, *lines):
         return docs.invoice_issue(self.store, self._draft_for(customer, *lines))["invoice"]["status"]
 
-    def test_removed_estimate_memory_clears_after_one_yes_and_lapses_after_30_days(self):
+    def test_removed_estimate_memory_asks_once_per_amount_and_lapses_after_30_days(self):
         """An independent review of 1.0.3: after a deleted "Labour 8 h" estimate, the next several "Labour 2 h"
         invoices each asked, and "Extra labour" or "Spare parts" still asked months later."""
         customer = self._customer("Labour Customer")
         labour = {"kind": "labour", "description": "Labour", "qty": 2}
         docs.invoice_delete(self.store, self._draft_for(customer, dict(labour, qty=8, estimate=True)))
         self.assertIn("Labour: 8 hr", self._issue_with_the_owners_yes(self._draft_for(customer, labour)))
-        self.assertEqual(self._issued_plain(customer, labour), "issued")  # one yes cleared it for that description
+        self.assertEqual(self._issued_plain(customer, labour), "issued")  # the owner said yes to that amount
         self.assertEqual(self._issued_plain(customer, {"kind": "labour", "description": "Extra labour", "qty": 1}),
                          "issued")  # fmt: skip
-        self.assertNotIn("unconfirmed_estimates", self.store.customer(customer))
+        self._asked(self._draft_for(customer, dict(labour, qty=3)))  # over it: asks
         later = self._customer("Later Customer")
         call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
         docs.invoice_delete(self.store, self._draft_for(later, dict(call_out, estimate=True)))
@@ -920,7 +925,7 @@ class WorkflowTests(StoreCase):
         self.assertEqual(self._issued_plain(later, dict(call_out, unit_price="95")), "issued")
         self.assertEqual(self._issued_plain(later, {"kind": "fee", "description": "Travel", "unit_price": "40"}),
                          "issued")  # fmt: skip
-        self.assertNotIn("unconfirmed_estimates", self.store.customer(later))  # the saved record went too
+        self.assertIn("unconfirmed_estimates", self.store.customer(later))  # skipped, not deleted
 
     def test_an_honest_reprice_confirmed_on_its_invoice_isnt_remembered_as_taken_off(self):
         """An independent review of 1.0.3: Call-out $89 re-priced to $99 with the mark kept, and the owner's yes
@@ -929,20 +934,24 @@ class WorkflowTests(StoreCase):
         call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
         a = self._draft_for(customer, dict(call_out, estimate=True))
         docs.invoice_update(self.store, a, {"lines": [dict(call_out, unit_price="99", estimate=True)]})
-        self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="95")), "issued")  # re-priced: only
-        self.assertIn(f"(changed on draft {a})", self._asked(self._draft_for(customer, call_out)).ask_owner)  # $89
+        for price in ("89", "88.99", "95"):  # while A is a draft, its old figure counts at any amount (1.0.4 check)
+            with self.subTest(price=price):
+                copy = self._draft_for(customer, dict(call_out, unit_price=price))
+                self.assertIn(f"(Call-out: 1 ea at $89.00 = $89.00 CAD, changed on draft {a})",
+                              self._asked(copy).ask_owner)  # fmt: skip
         question = self._issue_with_the_owners_yes(a)
         self.assertIn("Call-out: 1 ea at $89.00 = $89.00 CAD was an estimate, since changed", question)
-        self.assertNotIn("unconfirmed_estimates", self.store.customer(customer))
+        self.assertNotIn("unconfirmed_estimates", self.store.customer(customer))  # the owner said yes to $99
         self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="99")), "issued")
+        self.assertEqual(self._issued_plain(customer, call_out), "issued")
         parts = {"kind": "material", "description": "Parts", "qty": 1, "unit_cost": "240"}
         b = self._draft_for(customer, dict(parts, estimate=True), {"kind": "labour", "description": "Fit", "qty": 1})
         docs.invoice_update(self.store, b, {"lines": [{"kind": "labour", "description": "Fit", "qty": 1}]})
         self._issue_with_the_owners_yes(b)  # a real removal, then the owner's yes: still remembered
         spare = {"kind": "material", "description": "Spare parts", "qty": 1, "unit_cost": "20"}
-        self.assertIn(f"(Parts: 1 ea at $300.00 = $300.00 CAD, taken off invoice {b} before it was issued)",
+        self.assertIn(f"(Parts: 1 ea at $300.00 = $300.00 CAD, changed or taken off invoice {b} before it was issued)",
                       self._issue_with_the_owners_yes(self._draft_for(customer, spare)))  # fmt: skip
-        self.assertEqual(self._issued_plain(customer, spare), "issued")  # and one yes cleared it
+        self.assertEqual(self._issued_plain(customer, spare), "issued")  # the owner said yes to $25
 
     def test_an_open_estimate_matches_its_name_written_without_the_space(self):
         """A copy of an estimate still on its draft, with its name written "Callout" for "Call-out", asks."""
@@ -965,19 +974,21 @@ class WorkflowTests(StoreCase):
 
     def test_more_retypes_match_and_the_owner_can_forget_estimates(self):
         """An independent review of 1.0.3: "Callout fee", "Call-outs", an Armenian օ, a Latin ɑ and a digit 0 got
-        past a removed "Call-out"; and nothing could retire a customer's remembered estimates."""
+        past a removed "Call-out"; and nothing could retire a customer's remembered estimates. The 1.0.4 check: a
+        small capital ᴀ too."""
         customer = self._customer("Retype Customer")
         call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
         docs.invoice_delete(self.store, self._draft_for(customer, dict(call_out, estimate=True)))
-        for retyped in ("Callout fee", "Call-outs", "Call-\u0585ut", "C\u0251ll-out", "Call-0ut"):
+        for retyped in ("Callout fee", "Call-outs", "Call-\u0585ut", "C\u0251ll-out", "Call-0ut", "C\u1d00ll-out",
+                        "\u1d04\u1d00\u029f\u029f-\u1d0f\u1d1c\u1d1b"):  # fmt: skip
             with self.subTest(retyped=retyped):
                 self._asked(self._draft_for(customer, dict(call_out, description=retyped, unit_price="95")))
         with self.assertRaises(JTPError) as caught:
             docs.forget_estimates(self.store, customer)
         asked = caught.exception
-        self.assertEqual(asked.ask_owner, "Stop checking Retype Customer's invoices against these estimates you never "
-                         "confirmed: Call-out: 1 ea at $89.00 = $89.00 CAD (on a deleted draft)? Copies of them won't "
-                         "be asked about any more.")  # fmt: skip
+        self.assertEqual(asked.ask_owner, "Forget these estimates you never confirmed for Retype Customer: Call-out: 1 "
+                         "ea at $89.00 = $89.00 CAD (on a deleted draft)? Copies of them won't be asked about any "
+                         "more.")  # fmt: skip
         with self.assertRaises(JTPError) as caught:
             docs.forget_estimates(self.store, customer, owner_confirmed="ok", confirm_code=asked.confirm)
         self.assertEqual(caught.exception.code, "unclear_answer")
@@ -986,6 +997,121 @@ class WorkflowTests(StoreCase):
         self.assertEqual(out["forgotten"], ["Call-out: 1 ea at $89.00 = $89.00 CAD (on a deleted draft)"])
         self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="95")), "issued")
         self.assertIn("Nothing to forget", docs.forget_estimates(self.store, customer)["note"])
+
+    def test_the_date_never_goes_backwards(self):
+        """An independent check of 1.0.4: with the date set back, deleting a draft or taking an estimate off one dated
+        the record in the past, so it had already lapsed and a copy issued unasked."""
+        customer = self._customer("Clock Customer")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        repair = {"kind": "labour", "description": "Repair", "qty": 2}
+        a = self._draft_for(customer, dict(call_out, estimate=True), repair)
+        b = self._draft_for(customer, dict(call_out, description="Travel", estimate=True))
+        os.environ["JTP_TODAY"] = "2026-09-01"  # the computer's clock set back
+        self.assertEqual((str(self.store.clock_day()), str(self.store.today())), ("2026-09-01", "2026-10-15"))
+        docs.invoice_delete(self.store, b)
+        docs.invoice_update(self.store, a, {"lines": [repair]})
+        self.assertEqual(self.store.customer(customer)["unconfirmed_estimates"][0]["date"], "2026-10-15")
+        self.assertEqual(self.store.doc(a)["removed_estimates"][0]["date"], "2026-10-15")
+        os.environ["JTP_TODAY"] = "2026-10-16"
+        for line in (dict(call_out, unit_price="95"), dict(call_out, description="Travel", unit_price="40")):
+            self._asked(self._draft_for(customer, line))
+
+    def test_the_date_never_deletes_a_removed_estimate(self):
+        """An independent check of 1.0.4: issuing an unrelated invoice with the date set ahead deleted the customer's
+        removed estimates for good. The date only decides which are checked; only the owner's yes deletes one, so
+        deleting or issuing their draft with the date ahead keeps them too."""
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        repair = {"kind": "labour", "description": "Repair", "qty": 2}
+        for route in ("an unrelated invoice issued", "the draft deleted", "the draft issued"):
+            with self.subTest(route=route):
+                customer = self._customer(f"Ahead {route}")
+                a = self._draft_for(customer, dict(call_out, estimate=True), repair)
+                if route == "an unrelated invoice issued":
+                    docs.invoice_delete(self.store, a)
+                else:
+                    docs.invoice_update(self.store, a, {"lines": [repair]})  # the estimate taken off A
+                os.environ["JTP_TODAY"] = "2026-12-01"  # the computer's clock set ahead
+                if route == "an unrelated invoice issued":
+                    drain = {"kind": "fee", "description": "Drain clean", "unit_price": "10"}
+                    self.assertEqual(self._issued_plain(customer, drain), "issued")
+                elif route == "the draft deleted":
+                    docs.invoice_delete(self.store, a)
+                else:
+                    self._issue_with_the_owners_yes(a)
+                self.assertIn("unconfirmed_estimates", self.store.customer(customer))
+                (self.store.home / "clock.json").unlink()  # the owner puts the clock right
+                os.environ["JTP_TODAY"] = "2026-10-16"
+                self.store = Store(self.store.home)
+                self._asked(self._draft_for(customer, dict(call_out, unit_price="95")))
+
+    def test_a_yes_covers_a_removed_estimate_only_up_to_the_amount_confirmed(self):
+        """An independent check of 1.0.4: after the owner's yes to a "Call-out $1" copy of a removed $89 estimate, a
+        $50 half or a "Repair and call-out" $5, or to the estimate re-priced to $1 on its own invoice, Call-outs at
+        $89 and $500 issued unasked."""
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        repair = {"kind": "labour", "description": "Repair", "qty": 2}
+        smaller = {"$1 copy": dict(call_out, unit_price="1"), "$50 half": dict(call_out, unit_price="50"),
+                   "merged $5": dict(call_out, description="Repair and call-out", unit_price="5")}  # fmt: skip
+        for route, small in smaller.items():
+            with self.subTest(route=route):
+                customer = self._customer(f"Small Yes {route}")
+                a = self._draft_for(customer, dict(call_out, estimate=True), repair)
+                docs.invoice_update(self.store, a, {"lines": [repair]})  # the estimate taken off A
+                self.assertIn(f"(Call-out: 1 ea at $89.00 = $89.00 CAD, taken off draft {a})",
+                              self._issue_with_the_owners_yes(self._draft_for(customer, small)))  # fmt: skip
+                for price in ("89", "500"):
+                    self._asked(self._draft_for(customer, dict(call_out, unit_price=price)))
+                self.assertEqual(self._issued_plain(customer, dict(small, description="Call-out")), "issued")
+        customer = self._customer("Full Yes")
+        docs.invoice_delete(self.store, self._draft_for(customer, dict(call_out, estimate=True)))
+        self._issue_with_the_owners_yes(self._draft_for(customer, call_out))  # a yes to the estimate's own figure
+        self.assertNotIn("unconfirmed_estimates", self.store.customer(customer))  # clears it
+        self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="500")), "issued")
+        customer = self._customer("Split Yes")
+        docs.invoice_delete(self.store, self._draft_for(customer, dict(call_out, estimate=True)))
+        halves = [dict(call_out, description="Call-out part 1", unit_price="50"),
+                  dict(call_out, description="Call-out part 2", unit_price="39")]  # fmt: skip
+        self._issue_with_the_owners_yes(self._draft_for(customer, *halves))  # $89 in all, on one invoice
+        self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="500")), "issued")
+        for route in ("voided", "issued"):  # a yes given while A was a draft still counts once A is gone
+            with self.subTest(route=route):
+                customer = self._customer(f"Carried Yes {route}")
+                a = self._draft_for(customer, dict(call_out, estimate=True), repair)
+                docs.invoice_update(self.store, a, {"lines": [repair]})
+                self._issue_with_the_owners_yes(self._draft_for(customer, dict(call_out, unit_price="50")))
+                if route == "voided":
+                    owner_approves(docs.invoice_void, self.store, a, "Wrong job")
+                else:
+                    self._issue_with_the_owners_yes(a)
+                self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="50")), "issued")
+                self._asked(self._draft_for(customer, call_out))
+        customer = self._customer("Repriced Down")
+        a = self._draft_for(customer, dict(call_out, estimate=True))
+        docs.invoice_update(self.store, a, {"lines": [dict(call_out, unit_price="1", estimate=True)]})
+        self.assertIn("Call-out: 1 ea at $89.00 = $89.00 CAD was an estimate", self._issue_with_the_owners_yes(a))
+        self.assertIn(f"(Call-out: 1 ea at $89.00 = $89.00 CAD, changed or taken off invoice {a} before it was issued)",
+                      self._asked(self._draft_for(customer, call_out)).ask_owner)  # fmt: skip
+        self.assertEqual(self._issued_plain(customer, dict(call_out, unit_price="1")), "issued")
+
+    def test_the_question_names_each_matched_estimate_with_its_figure_once(self):
+        """An independent check of 1.0.4: an exact copy's question left out the estimate's figure, and two deleted
+        drafts read "on a deleted draft; on a deleted draft"."""
+        customer = self._customer("Twice Deleted")
+        call_out = {"kind": "fee", "description": "Call-out", "unit_price": "89"}
+        for _ in range(2):
+            docs.invoice_delete(self.store, self._draft_for(customer, dict(call_out, estimate=True)))
+        question = self._asked(self._draft_for(customer, call_out)).ask_owner
+        self.assertIn("you haven't confirmed (Call-out: 1 ea at $89.00 = $89.00 CAD, on a deleted draft). Are these "
+                      "figures final?", question)  # fmt: skip
+
+    def test_every_word_a_question_lists_counts_after_a_yes(self):
+        """An independent check of 1.0.4: "stop checking" was listed for forget-estimates, but "yes, stop checking"
+        read as a no."""
+        for words in (docs.FORGET_WORDS, docs.ESTIMATES_FINAL_WORDS, docs.VOID_WORDS, docs.CREDIT_WORDS):
+            for phrase in words:
+                with self.subTest(phrase=phrase):
+                    self.assertFalse(confirm.reads_as_no(f"yes, {phrase}"))
+                    self.assertTrue(confirm.plain_yes(f"yes, {phrase}", words))
 
     def test_a_yes_only_covers_the_estimates_it_was_about(self):
         """An independent review of 1.0.2: after a yes to a copy of "Call-out $89", a later, new estimate of the same
@@ -997,12 +1123,12 @@ class WorkflowTests(StoreCase):
         repeat = self._draft_for(customer, call_out)
         self.assertEqual(docs.invoice_issue(self.store, repeat)["invoice"]["status"], "issued")  # the yes covers it
         second = self._draft_for(customer, dict(call_out, estimate=True))  # a new estimate, the same figure
-        self.assertIn(f"(on draft {second})", self._asked(self._draft_for(customer, call_out)).ask_owner)
+        self.assertIn(f"$89.00 CAD, on draft {second})", self._asked(self._draft_for(customer, call_out)).ask_owner)
         docs.invoice_update(self.store, second, {"lines": [{"kind": "labour", "description": "Repair", "qty": 1}]})
         self.assertIn("Call-out: 1 ea at $89.00 = $89.00 CAD was an estimate", self._asked(second).ask_owner)
-        os.environ["JTP_TODAY"] = "2026-11-20"  # more than 30 days on: the yes about the first has expired, and so
-        self.assertIn(f"(on draft {first})", self._asked(self._draft_for(customer, call_out)).ask_owner)  # has the
-        # memory of the one taken off the second (only open estimates are still checked)
+        os.environ["JTP_TODAY"] = "2026-11-20"  # more than 30 days on: the yes about the first has expired, and the
+        # one taken off the second has lapsed (only open estimates are still checked)
+        self.assertIn(f"$89.00 CAD, on draft {first})", self._asked(self._draft_for(customer, call_out)).ask_owner)
 
     def test_a_yes_to_other_figures_doesnt_clear_remembered_estimates(self):
         """An independent review of 1.0.1: the question named only the new invoice's figures, so a yes to a $10
@@ -1027,13 +1153,13 @@ class WorkflowTests(StoreCase):
         older = self._open_draft()
         original = self._estimated_draft()
         copy = self._stripped_copy(original)
-        self.assertIn(f"(on draft {original['id']})", " ".join(copy["warnings"]))
+        self.assertIn(f"$89.00 CAD, on draft {original['id']})", " ".join(copy["warnings"]))
         spec = {"title": "Older", "lines": [{"kind": "fee", "description": "Call out", "unit_price": "89"}]}
         updated = docs.invoice_update(self.store, older, spec)  # copied into an older draft ("Call out": the same)
         self.assertIn("matches an estimate", " ".join(updated["warnings"]))
         question = self._issue_with_the_owners_yes(copy["invoice"]["id"])
-        self.assertIn("these lines match estimates for Jane Doe that you haven't confirmed "
-                      f"(on draft {original['id']})", question)  # fmt: skip
+        self.assertIn("these lines match estimates for Jane Doe that you haven't confirmed (Call-out: 1 ea at $89.00 = "
+                      f"$89.00 CAD, on draft {original['id']})", question)  # fmt: skip
         self.assertEqual(docs.invoice_issue(self.store, older)["invoice"]["status"], "issued")  # the yes sticks
         self._asked(original["id"])  # the original still asks for itself
 
@@ -1046,8 +1172,8 @@ class WorkflowTests(StoreCase):
         copy = docs.co_create(self.store, job_id, {"title": "Valve", "lines": [valve]})["change_order"]["id"]
         docs.co_approve(self.store, copy, "Jane", "text", None)
         inv = docs.invoice_create(self.store, job_id=job_id)["invoice"]["id"]  # bills the copy, not the sent one
-        self.assertIn(f"these lines match estimates for Jane Doe that you haven't confirmed (on change order "
-                      f"{sent['change_order']['id']})", self._asked(inv).ask_owner)  # fmt: skip
+        self.assertIn("these lines match estimates for Jane Doe that you haven't confirmed (Extra valve: 1 ea at "
+                      f"$50.00 = $50.00 CAD, on change order {sent['change_order']['id']})", self._asked(inv).ask_owner)
 
     def test_a_voided_change_order_keeps_its_estimates(self):
         """An independent review of 1.0.1: co void dropped a change order's estimate, so the same work re-created
@@ -1062,7 +1188,7 @@ class WorkflowTests(StoreCase):
         docs.co_approve(self.store, again["id"], "Jane", "text", None)
         inv = docs.invoice_create(self.store, job_id=job_id)["invoice"]
         question = self._asked(inv["id"]).ask_owner
-        self.assertIn(f"(on voided change order {co['change_order']['id']})", question)
+        self.assertIn(f"$50.00 CAD, on voided change order {co['change_order']['id']})", question)
         self.assertIn("Extra valve", question)
         self.assertNotIn("Work", question)  # the quote's own line wasn't an estimate
 
@@ -1533,6 +1659,13 @@ class DocsTests(unittest.TestCase):
         self.assertIn("by its description at any amount", security)
         self.assertIn("for 30 days", security)
 
+    def test_security_says_what_the_30_days_are_counted_on(self):
+        """An independent check of 1.0.4: SECURITY.md didn't say what the 30 days were measured against."""
+        security = " ".join((ROOT / "SECURITY.md").read_text(encoding="utf-8").split())
+        self.assertIn("counted on the computer's clock, in the business's time zone", security)
+        self.assertIn("the date never goes backwards", security)
+        self.assertIn("`JTP_TODAY` sets the date only in the toolkit's own tests", security)
+
     def test_the_skill_says_to_keep_the_estimate_mark_when_changing_a_quantity(self):
         """An independent review of 1.0.2: the likeliest honest slip is dropping the mark while changing a quantity."""
         skill = " ".join((ROOT / "skills" / "job-to-paid" / "SKILL.md").read_text(encoding="utf-8").split())
@@ -1544,16 +1677,48 @@ class DocsTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
-    def run_cli(self, home, *args, stdin=None):
-        env = dict(os.environ, JTP_TODAY="2026-10-15")
+    def run_cli(self, home, *args, stdin=None, env=None):
         proc = subprocess.run(
             [sys.executable, str(SCRIPTS / "jtp.py"), "--home", str(home), *args],
             capture_output=True,
             text=True,
             input=stdin,
-            env=env,
+            env=dict(os.environ, **(env or {})),
         )
         return proc.returncode, json.loads(proc.stdout)
+
+    def test_jtp_today_is_ignored_outside_the_tests(self):
+        """An independent check of 1.0.4: JTP_TODAY moved "today" for any command, so a removed estimate could lapse
+        with no owner involved: deleted with a past date, a copy issued with a future one, or the memory wiped by
+        issuing an unrelated invoice with a future date."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home, past, ahead = Path(tmp) / "data", {"JTP_TODAY": "2026-09-01"}, {"JTP_TODAY": "2027-06-01"}
+            self.run_cli(home, "demo", "--currency", "CAD")
+            spec = '[{"kind":"fee","description":"Call-out","unit_price":89,"estimate":true}]'
+            draft = self.run_cli(home, "invoice", "create", "--customer", "C-0001", "--spec", spec)[1]["invoice"]["id"]
+            self.run_cli(home, "invoice", "delete", draft, env=past)
+            remembered = Store(home).customer("C-0001")["unconfirmed_estimates"][0]
+            self.assertNotEqual(remembered["date"], "2026-09-01")  # dated by the computer's clock
+            copy = self.run_cli(home, "invoice", "create", "--customer", "C-0001", "--spec",
+                                '[{"kind":"fee","description":"Call-out","unit_price":89}]')[1]["invoice"]["id"]  # fmt: skip
+            for env in (None, ahead):
+                code, out = self.run_cli(home, "invoice", "issue", copy, env=env)
+                self.assertEqual((code, out["code"]), (1, "estimates_unconfirmed"), env)
+            drain = self.run_cli(home, "invoice", "create", "--customer", "C-0001", "--spec",
+                                 '[{"kind":"fee","description":"Drain clean","unit_price":10}]')[1]["invoice"]["id"]
+            code, out = self.run_cli(home, "invoice", "issue", drain, env=ahead)
+            self.assertEqual(code, 0)
+            self.assertNotEqual(Store(home).doc(drain)["date"], "2027-06-01")
+            code, out = self.run_cli(home, "invoice", "issue", copy)
+            self.assertEqual((code, out["code"]), (1, "estimates_unconfirmed"))  # the memory is still there
+
+    def test_doctor_says_when_the_computers_clock_is_behind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "data"
+            self.run_cli(home, "demo")
+            (home / "clock.json").write_text('{"latest": "2099-01-01"}', encoding="utf-8")
+            code, out = self.run_cli(home, "doctor")
+            self.assertIn("keeps using 2099-01-01 until the clock catches up", out["date_note"])
 
     def test_cli_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1661,6 +1826,13 @@ class CliTests(unittest.TestCase):
                 code, out = self.run_cli(home, *args, "--dry-run")
                 self.assertEqual((code, out["code"]), (1, "usage"), args)
             self.assertEqual(self.run_cli(home, "invoice", "show", inv)[1]["invoice"]["status"], "draft")
+            for args in (("customer", "forget-estimates", "C-0001"), ("payment", "record", inv, "--amount", "5"),
+                         ("brief",)):  # commands with no --dry-run say so too (an independent check of 1.0.4)
+                code, out = self.run_cli(home, *args, "--dry-run")
+                self.assertEqual((code, out["code"]), (1, "usage"), args)
+                self.assertTrue(out["error"].startswith(f"--dry-run doesn't work with {' '.join(args[:2])}"), out)
+            code, out = self.run_cli(home, "invoice", "issue", inv, "--no-such-flag")
+            self.assertEqual((code, out["code"], out["error"]), (2, "usage", "unrecognized arguments: --no-such-flag"))
 
     def test_forget_estimates_takes_the_owners_two_step_yes(self):
         with tempfile.TemporaryDirectory() as tmp:

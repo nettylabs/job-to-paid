@@ -320,6 +320,11 @@ def cmd_doctor(store, args):
         out["write_error"] = str(exc)
     if store.exists():
         out["setup"] = profile_mod.check(store.profile())
+        clock, latest = store.clock_day(), store.latest_day()
+        if latest and latest > clock:
+            out["date_note"] = (f"The computer's date ({iso(clock)}) is earlier than the last date this folder "
+                                f"was used ({iso(latest)}), so Job to Paid keeps using {iso(latest)} until the clock "
+                                "catches up: dates never go backwards. Check the computer's date and time.")  # fmt: skip
         out["counts"] = {
             "customers": len(store.customers()),
             "jobs": len(store.jobs()),
@@ -1646,7 +1651,12 @@ READ_ONLY = {"doctor", "selftest", "brief", "report", "search", "price", "render
 
 def main(argv=None) -> None:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, unknown = parser.parse_known_args(argv)
+    if "--dry-run" in unknown:  # a command with no --dry-run of its own refuses it below, saying why
+        unknown.remove("--dry-run")
+        args.dry_run = True
+    if unknown:
+        parser.error("unrecognized arguments: " + " ".join(unknown))
     if not args.command:
         parser.print_help()
         sys.exit(0)
@@ -1659,9 +1669,10 @@ def main(argv=None) -> None:
     store = _store(args)
     try:
         previews = DRY_RUN_ACTIONS.get(args.command, ()) + ("show", "list")
-        if getattr(args, "dry_run", False) and args.action not in previews:
+        action = getattr(args, "action", None)
+        if getattr(args, "dry_run", False) and action not in previews:
             raise JTPError(
-                f"--dry-run doesn't work with {args.command} {args.action}, so nothing was done.",
+                f"--dry-run doesn't work with {' '.join(filter(None, (args.command, action)))}, so nothing was done.",
                 hint="It previews " + ", ".join(f"{c} {a}" for c, acts in DRY_RUN_ACTIONS.items() for a in acts) + ".",
                 code="usage",
             )

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import confirm
 from . import documents as docs
-from . import followups, records, reports
+from . import followups, records, reports, util
 from .money import compute_totals, currency_display, format_total
 from .profile import follow_contact, new_profile
 from .render import render_doc, render_receipt
@@ -640,7 +640,7 @@ def selftest() -> dict:
             check("a yes covers only the estimate it was about: a new estimate of the same figure asks again",
                   asked == "estimates_unconfirmed", asked)  # fmt: skip
 
-            # 1.0.4: removed-estimate memory clears after one yes; an honest re-price isn't "taken off"; $0 lines.
+            # 1.0.4: removed-estimate memory asks once per amount; an honest re-price isn't "taken off"; $0 lines.
             fifth = records.customer_add(store, {"name": "Selftest Five", "email": "five@x.example"})["customer"]["id"]
             hours = {"kind": "labour", "description": "Labour", "qty": 2}
             gone = docs.invoice_create(store, customer_id=fifth, spec={"lines": [dict(hours, qty=8, estimate=True)]})
@@ -649,7 +649,8 @@ def selftest() -> dict:
             _with_estimates_yes(docs.invoice_issue, store, first)
             second = docs.invoice_create(store, customer_id=fifth, spec={"lines": [hours]})["invoice"]["id"]
             asked = _refusal(docs.invoice_issue, store, second)
-            check("a removed estimate is asked about once: one yes clears it", asked is None, asked)
+            check("a removed estimate is asked about once for the same work: a yes covers that amount", asked is None,
+                  asked)  # fmt: skip
             sixth = records.customer_add(store, {"name": "Selftest Six", "email": "six@x.example"})["customer"]["id"]
             fixed = docs.invoice_create(store, customer_id=sixth, spec={"lines": [dict(call_out, estimate=True)]})
             fixed = fixed["invoice"]["id"]
@@ -672,6 +673,34 @@ def selftest() -> dict:
             later = docs.invoice_create(store, job_id=job_id)["invoice"]
             check("a change order approved after the final invoice can still be billed",
                   [ln["description"] for ln in later["lines"]] == ["Add a tap"], later["lines"])  # fmt: skip
+
+            # The 1.0.4 check: the date can't be moved, and a small yes doesn't clear a bigger estimate.
+            os.environ["JTP_TODAY"], in_tests = "2001-01-01", util.TEST_DATES
+            util.TEST_DATES = False  # as in every command
+            try:
+                moved = util.today() == _dt.date(2001, 1, 1)
+            finally:
+                os.environ.pop("JTP_TODAY")
+                util.TEST_DATES = in_tests
+            check("JTP_TODAY doesn't move the date outside the toolkit's own tests", not moved)
+            eighth = records.customer_add(store, {"name": "Selftest Eight", "email": "eight@x.example"})
+            eighth = eighth["customer"]["id"]
+            gone = docs.invoice_create(store, customer_id=eighth, spec={"lines": [dict(call_out, estimate=True)]})
+            docs.invoice_delete(store, gone["invoice"]["id"])
+            small = docs.invoice_create(store, customer_id=eighth, spec={"lines": [dict(call_out, unit_price="1")]})
+            _with_estimates_yes(docs.invoice_issue, store, small["invoice"]["id"])
+            full = docs.invoice_create(store, customer_id=eighth, spec={"lines": [call_out]})["invoice"]["id"]
+            asked = _refusal(docs.invoice_issue, store, full)
+            check("a yes to a $1 copy of an $89 estimate doesn't clear it: an $89 copy still asks",
+                  asked == "estimates_unconfirmed", asked)  # fmt: skip
+            ahead = store.today() + _dt.timedelta(days=3)  # a date already used here, later than the clock
+            write_json(store.home / "clock.json", {"latest": iso(ahead)})
+            reopened = Store(store.home)
+            gone = docs.invoice_create(reopened, customer_id=eighth, spec={"lines": [dict(repair, estimate=True)]})
+            docs.invoice_delete(reopened, gone["invoice"]["id"])
+            dated = reopened.customer(eighth)["unconfirmed_estimates"][-1]["date"]
+            check("the date never goes backwards: a removed estimate is dated by the latest date already used",
+                  dated == iso(ahead), dated)  # fmt: skip
             write_json(Path(tmp) / "ok.json", {"ok": True})
         finally:
             if old_today:

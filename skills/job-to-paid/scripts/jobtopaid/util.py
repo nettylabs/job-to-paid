@@ -84,9 +84,15 @@ def trim_decimal(value: Decimal) -> str:
 # --------------------------------------------------------------------------
 
 
+# Only the unit tests turn this on, so that JTP_TODAY can stand in for the date there. Ordinary commands ignore
+# JTP_TODAY: moving "today" would let a dated record (an estimate taken off an invoice, the owner's yes) lapse early
+# or be dated in the past.
+TEST_DATES = False
+
+
 def today(tz_name: str | None = None) -> _dt.date:
-    """Today's date in the business's time zone (JTP_TODAY overrides, for tests)."""
-    override = os.environ.get("JTP_TODAY")
+    """Today's date in the business's time zone, from the computer's clock (JTP_TODAY in the unit tests only)."""
+    override = os.environ.get("JTP_TODAY") if TEST_DATES else None
     if override:
         try:
             return _dt.date.fromisoformat(override.strip())
@@ -231,8 +237,11 @@ LOOKALIKE_LETTERS = str.maketrans({
     # Armenian
     "օ": "o", "ս": "u", "հ": "h", "ո": "n", "ց": "g", "զ": "q",
     # Latin letters that look like others
-    "ɑ": "a", "ɡ": "g", "ı": "i", "ȷ": "j", "ɩ": "i", "ʋ": "u", "ᴄ": "c", "ᴏ": "o", "ᴜ": "u", "ᴠ": "v", "ᴡ": "w",
-    "ᴢ": "z",
+    "ɑ": "a", "ɡ": "g", "ı": "i", "ȷ": "j", "ɩ": "i", "ʋ": "u",
+    # Latin small capitals
+    "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ꜰ": "f", "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j", "ᴋ": "k",
+    "ʟ": "l", "ᴍ": "m", "ɴ": "n", "ᴏ": "o", "ᴘ": "p", "ꞯ": "q", "ʀ": "r", "ꜱ": "s", "ᴛ": "t", "ᴜ": "u", "ᴠ": "v",
+    "ᴡ": "w", "ʏ": "y", "ᴢ": "z",
 })
 
 
